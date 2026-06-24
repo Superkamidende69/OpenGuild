@@ -1,11 +1,13 @@
 import type {
   AppSettings,
   AutoModSettings,
+  Attachment,
   Channel,
   ChannelType,
   DirectMessage,
   EventItem,
   Guild,
+  GuildSettings,
   Message,
   ModerationReport,
   ModerationReportReason,
@@ -39,9 +41,17 @@ export interface CreateGuildInput {
 
 export interface CreateChannelInput {
   name: string;
-  type: Exclude<ChannelType, "stage">;
+  type: ChannelType;
   category: string;
   topic: string;
+}
+
+export interface UpdateGuildSettingsInput {
+  name: string;
+  initials: string;
+  accent: string;
+  serverTag: string;
+  settings: GuildSettings;
 }
 
 export interface CreateReportInput {
@@ -104,6 +114,23 @@ export async function createLocalChannel(apiBaseUrl: string, guildId: string, in
   }
 
   return (await response.json()) as { channel: Channel };
+}
+
+export async function updateLocalGuildSettings(apiBaseUrl: string, guildId: string, input: UpdateGuildSettingsInput) {
+  const response = await fetch(`${apiBaseUrl}/api/guilds/${encodeURIComponent(guildId)}/settings`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Unable to save server settings" }));
+    throw new Error(error.error || "Unable to save server settings");
+  }
+
+  return (await response.json()) as { guild: Guild };
 }
 
 export async function updateLocalSettings(apiBaseUrl: string, settings: AppSettings) {
@@ -200,14 +227,15 @@ export async function sendLocalMessage(
   apiBaseUrl: string,
   conversationId: string,
   authorId: string,
-  body: string
+  body: string,
+  attachments: Attachment[] = []
 ) {
   const response = await fetch(`${apiBaseUrl}/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ authorId, body })
+    body: JSON.stringify({ authorId, body, attachments })
   });
 
   if (!response.ok) {

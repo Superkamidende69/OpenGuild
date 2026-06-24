@@ -10,11 +10,13 @@ It does not use Discord branding, assets, APIs, or proprietary code. The goal is
 - Local-first host service on `127.0.0.1` with persisted server/guild data.
 - Server rail, guild switching, channel categories, text, rules, announcement, forum, voice, and stage channel types.
 - Direct messages, message composer, local message sending, slash-command suggestions, reactions, pinned/thread indicators, attachments, and bot-style messages.
+- Free premium-style perks for every local server: 500 MB upload metadata, HD stream indicators, custom emoji, custom stickers, server tags, enhanced role styles, profile effects, soundboard slots, vanity invite readiness, and server theming.
+- Persisted server settings for overview, accent color, server tags, default channels, notification defaults, verification, media filtering, invites, discovery, welcome screen, and local moderation requirements.
 - Voice dock with mute, deafen, screen share, and connection controls.
 - Activity, roles, members, moderation queue, integrations, inbox, and settings panels.
 - Command palette for channel and tool switching.
 - Create-local-server flow with community, gaming, and work templates.
-- Create-channel flow for text, voice, forum, announcement, and rules channels.
+- Create-channel flow for text, voice, stage, forum, announcement, and rules channels.
 - Persisted local settings for appearance, notifications, voice, privacy, and developer mode.
 - Persisted local moderation with reports, AutoMod rules, message deletion, and audit log.
 - Local seed data without demo people, fake DMs, fake messages, or fake scheduled events.
@@ -25,7 +27,7 @@ It does not use Discord branding, assets, APIs, or proprietary code. The goal is
 The UI is structured for these product areas:
 
 - Accounts, profiles, avatars, presence, rich status, and streamer mode.
-- Guilds, roles, permissions, invites, onboarding, discovery, and boosts.
+- Guilds, roles, permissions, invites, onboarding, discovery, and free perk tiers.
 - Text chat, DMs, group DMs, reactions, threads, pins, mentions, markdown, search, and attachments.
 - Voice, video, stage channels, screen sharing, device diagnostics, and noise controls.
 - Forums, announcements, rules channels, inbox, notification controls, and audit logs.
@@ -112,6 +114,7 @@ GET  /api/state
 GET  /api/events
 POST /api/guilds
 POST /api/guilds/:guildId/channels
+PUT  /api/guilds/:guildId/settings
 POST /api/conversations/:conversationId/messages
 PUT  /api/settings
 POST /api/moderation/reports

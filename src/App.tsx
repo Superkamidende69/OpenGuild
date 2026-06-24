@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AtSign,
@@ -64,6 +64,7 @@ import {
   resolveApiBaseUrl,
   sendLocalMessage,
   updateAutoMod,
+  updateLocalGuildSettings,
   updateLocalSettings,
   updateModerationReport,
   type CreateChannelInput,
@@ -73,10 +74,13 @@ import {
 import type {
   AppSettings,
   AutoModSettings,
+  Attachment,
   Channel,
   ChannelType,
   EventItem,
   Guild,
+  GuildPerks,
+  GuildSettings,
   Message,
   ModerationReportReason,
   ModerationState,
@@ -84,9 +88,16 @@ import type {
   User
 } from "./types";
 
-type InspectorView = "activity" | "roles" | "moderation" | "apps" | "settings";
+type InspectorView = "activity" | "roles" | "perks" | "moderation" | "apps" | "settings";
 
 type SettingsKey = keyof AppSettings;
+type ServerSettingsInput = {
+  name: string;
+  initials: string;
+  accent: string;
+  serverTag: string;
+  settings: GuildSettings;
+};
 
 const currentUserId = "u-you";
 const defaultAppSettings: AppSettings = {
@@ -110,6 +121,35 @@ const defaultModerationState: ModerationState = {
   }
 };
 
+const defaultGuildPerks: GuildPerks = {
+  tier: 3,
+  uploadLimitMb: 500,
+  hdStreaming: true,
+  customEmoji: true,
+  customStickers: true,
+  animatedAvatars: true,
+  profileEffects: true,
+  serverTag: "OG",
+  enhancedRoleStyles: true,
+  serverTheme: true,
+  soundboard: true,
+  vanityInvite: true
+};
+
+const customEmoji = [
+  { name: "spark", text: ":spark:" },
+  { name: "ship", text: ":ship:" },
+  { name: "boost", text: ":boost:" },
+  { name: "verified", text: ":verified:" },
+  { name: "sound", text: ":sound:" }
+];
+
+const customStickers = [
+  { name: "Launch day", text: "[sticker: launch-day]" },
+  { name: "Ship it", text: "[sticker: ship-it]" },
+  { name: "Local host", text: "[sticker: local-host]" }
+];
+
 const commandHints = [
   { command: "/poll", detail: "Create a poll in the current channel" },
   { command: "/thread", detail: "Start a thread from the next message" },
@@ -123,6 +163,8 @@ const quickActions = [
   { label: "Server discovery", icon: Compass },
   { label: "Notifications", icon: Bell }
 ];
+
+const accentSwatches = ["#64d2b8", "#ff8a65", "#f6c85f", "#b98cff", "#7ea7ff", "#e66b75"];
 
 const integrations = [
   { id: "bot", title: "Verified Bots", detail: "Slash commands, OAuth scopes, webhooks" },
@@ -141,6 +183,8 @@ function App() {
   const [activeDmId, setActiveDmId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>(seedMessages);
   const [draft, setDraft] = useState("");
+  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
+  const [showAssetPanel, setShowAssetPanel] = useState(false);
   const [inspector, setInspector] = useState<InspectorView>("activity");
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [voiceConnected, setVoiceConnected] = useState(false);
@@ -154,9 +198,11 @@ function App() {
   const [showCreateServer, setShowCreateServer] = useState(false);
   const [showCreateChannel, setShowCreateChannel] = useState<{ category: string } | null>(null);
   const [settingsSaveState, setSettingsSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [serverSettingsSaveState, setServerSettingsSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [settings, setSettings] = useState<AppSettings>(defaultAppSettings);
   const [moderation, setModeration] = useState<ModerationState>(defaultModerationState);
   const [moderationNotice, setModerationNotice] = useState("Moderation queue is ready");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     window.openGuild?.getVersion().then(setVersion).catch(() => setVersion("dev"));
@@ -236,6 +282,7 @@ function App() {
     () => guildList.find((guild) => guild.id === selectedGuildId) ?? guildList[0] ?? fallbackGuilds[0],
     [guildList, selectedGuildId]
   );
+  const currentPerks = useMemo(() => getGuildPerks(currentGuild), [currentGuild]);
 
   const activeDm = useMemo(
     () => dmList.find((dm) => dm.id === activeDmId) ?? null,
@@ -269,11 +316,12 @@ function App() {
 
   const submitMessage = async () => {
     const body = draft.trim();
-    if (!body) {
+    if (!body && pendingAttachments.length === 0) {
       return;
     }
 
-    const messageBody = body === "/shrug" ? "*shrugs*" : body;
+    const messageBody = body === "/shrug" ? "*shrugs*" : body || "Shared an attachment";
+    const attachmentsToSend = pendingAttachments;
     const fallbackMessage: Message = {
       id: `m-${Date.now()}`,
       channelId: activeConversationId,
@@ -283,14 +331,23 @@ function App() {
         hour: "2-digit",
         minute: "2-digit"
       }).format(new Date()),
-      reactions: []
+      reactions: [],
+      attachments: attachmentsToSend.length ? attachmentsToSend : undefined
     };
 
     setDraft("");
+    setPendingAttachments([]);
+    setShowAssetPanel(false);
 
     if (apiOnline) {
       try {
-        const { message } = await sendLocalMessage(apiBaseUrl, activeConversationId, currentUserId, messageBody);
+        const { message } = await sendLocalMessage(
+          apiBaseUrl,
+          activeConversationId,
+          currentUserId,
+          messageBody,
+          attachmentsToSend
+        );
         setMessages((items) => [...items, message]);
       } catch (error) {
         setApiOnline(false);
@@ -304,6 +361,33 @@ function App() {
     if (body.startsWith("/mod")) {
       setInspector("moderation");
     }
+  };
+
+  const addCustomToken = (value: string) => {
+    setDraft((current) => {
+      const spacer = current.trim().length > 0 && !current.endsWith(" ") ? " " : "";
+      return `${current}${spacer}${value} `;
+    });
+    setShowAssetPanel(false);
+  };
+
+  const handleAttachmentSelection = (files: FileList | null) => {
+    if (!files?.length) {
+      return;
+    }
+
+    const nextAttachments = Array.from(files).slice(0, 10).map<Attachment>((file) => ({
+      name: file.name,
+      type: file.type.startsWith("image/")
+        ? "image"
+        : file.type.startsWith("video/")
+          ? "video"
+          : "file",
+      size: formatBytes(file.size)
+    }));
+
+    setPendingAttachments((items) => [...items, ...nextAttachments].slice(0, 10));
+    setShowAssetPanel(false);
   };
 
   const selectGuild = (guild: Guild) => {
@@ -382,6 +466,26 @@ function App() {
         setSettingsSaveState("error");
         setLocalNotice(error instanceof Error ? error.message : "Unable to save settings");
       });
+  };
+
+  const saveServerSettings = async (input: ServerSettingsInput) => {
+    if (!apiOnline) {
+      setGuildList((items) => updateGuildInList(items, mergeGuildSettings(currentGuild, input)));
+      setServerSettingsSaveState("idle");
+      setLocalNotice("Server settings changed in memory because local host is offline");
+      return;
+    }
+
+    setServerSettingsSaveState("saving");
+    try {
+      const { guild } = await updateLocalGuildSettings(apiBaseUrl, currentGuild.id, input);
+      setGuildList((items) => updateGuildInList(items, guild));
+      setServerSettingsSaveState("saved");
+      setLocalNotice(`${guild.name} server settings saved locally`);
+    } catch (error) {
+      setServerSettingsSaveState("error");
+      setLocalNotice(error instanceof Error ? error.message : "Unable to save server settings");
+    }
   };
 
   const reportMessage = async (message: Message, reason: ModerationReportReason = "other") => {
@@ -495,7 +599,10 @@ function App() {
   };
 
   return (
-    <div className={classNames("app-shell", settings.compactMode && "compact")}>
+    <div
+      className={classNames("app-shell", settings.compactMode && "compact")}
+      style={{ "--server-accent": currentGuild.accent } as React.CSSProperties}
+    >
       {showCreateServer && (
         <CreateServerDialog
           apiOnline={apiOnline}
@@ -557,9 +664,12 @@ function App() {
         <header className="server-header">
           <div>
             <strong>{currentGuild.name}</strong>
-            <span>{apiOnline ? "Hosted locally" : "Offline fallback"} / Boost level {currentGuild.boostLevel}</span>
+            <span>
+              {apiOnline ? "Hosted locally" : "Offline fallback"} / Free perks level {currentPerks.tier}
+            </span>
           </div>
-          <button className="icon-button" title="Server menu" aria-label="Server menu">
+          <b className="server-tag">{currentPerks.serverTag}</b>
+          <button className="icon-button" title="Server settings" aria-label="Server settings" onClick={() => setInspector("settings")}>
             <ChevronDown size={18} />
           </button>
         </header>
@@ -665,6 +775,7 @@ function App() {
               channel={currentChannel}
               dmUser={activeDmUser}
               guild={currentGuild}
+              perks={currentPerks}
               eventCount={visibleEvents.length}
               memberCount={userList.length}
             />
@@ -683,6 +794,7 @@ function App() {
                     key={message.id}
                     message={message}
                     author={author}
+                    serverTag={currentPerks.serverTag}
                     onReport={() => reportMessage(message, "other")}
                     onDelete={() => deleteMessage(message.id)}
                     onReact={(emoji) =>
@@ -704,10 +816,30 @@ function App() {
 
             <form className="composer" onSubmit={sendMessage}>
               <div className="composer-tools">
-                <button type="button" title="Upload file" aria-label="Upload file">
+                <input
+                  ref={fileInputRef}
+                  className="hidden-file-input"
+                  type="file"
+                  multiple
+                  onChange={(event) => {
+                    handleAttachmentSelection(event.currentTarget.files);
+                    event.currentTarget.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  title={`Upload file up to ${currentPerks.uploadLimitMb} MB`}
+                  aria-label="Upload file"
+                  onClick={() => fileInputRef.current?.click()}
+                >
                   <Upload size={18} />
                 </button>
-                <button type="button" title="Open emoji picker" aria-label="Open emoji picker">
+                <button
+                  type="button"
+                  title="Open emoji and sticker picker"
+                  aria-label="Open emoji picker"
+                  onClick={() => setShowAssetPanel((value) => !value)}
+                >
                   <Smile size={18} />
                 </button>
                 <button type="button" title="Create poll" aria-label="Create poll">
@@ -722,6 +854,63 @@ function App() {
               <button className="send-button" type="submit" title="Send message" aria-label="Send message">
                 <Send size={18} />
               </button>
+              {pendingAttachments.length > 0 ? (
+                <div className="attachment-tray">
+                  {pendingAttachments.map((attachment) => (
+                    <button
+                      key={`${attachment.name}-${attachment.size}`}
+                      type="button"
+                      title={`Remove ${attachment.name}`}
+                      onClick={() =>
+                        setPendingAttachments((items) =>
+                          items.filter((item) => item.name !== attachment.name || item.size !== attachment.size)
+                        )
+                      }
+                    >
+                      <File size={14} />
+                      <span>{attachment.name}</span>
+                      <small>{attachment.size}</small>
+                      <X size={13} />
+                    </button>
+                  ))}
+                  <span>{currentPerks.uploadLimitMb} MB uploads are free</span>
+                </div>
+              ) : null}
+              {showAssetPanel ? (
+                <div className="asset-panel">
+                  <section>
+                    <strong>Custom Emoji</strong>
+                    <div>
+                      {customEmoji.map((emoji) => (
+                        <button
+                          key={emoji.name}
+                          type="button"
+                          aria-label={`Insert custom emoji ${emoji.text}`}
+                          onClick={() => addCustomToken(emoji.text)}
+                        >
+                          {emoji.text}
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                  <section>
+                    <strong>Custom Stickers</strong>
+                    <div>
+                      {customStickers.map((sticker) => (
+                        <button
+                          key={sticker.name}
+                          type="button"
+                          aria-label={`Insert custom sticker ${sticker.name}`}
+                          onClick={() => addCustomToken(sticker.text)}
+                        >
+                          <span>{sticker.name}</span>
+                          <small>{sticker.text}</small>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+              ) : null}
               {draft.startsWith("/") && (
                 <div className="slash-menu">
                   {commandHints
@@ -741,6 +930,7 @@ function App() {
             <div className="inspector-tabs">
               <InspectorTab current={inspector} view="activity" onClick={setInspector} icon={Activity} label="Activity" />
               <InspectorTab current={inspector} view="roles" onClick={setInspector} icon={Crown} label="Roles" />
+              <InspectorTab current={inspector} view="perks" onClick={setInspector} icon={Sparkles} label="Perks" />
               <InspectorTab current={inspector} view="moderation" onClick={setInspector} icon={Shield} label="Mod" />
               <InspectorTab current={inspector} view="apps" onClick={setInspector} icon={Bot} label="Apps" />
               <InspectorTab current={inspector} view="settings" onClick={setInspector} icon={Settings} label="Settings" />
@@ -757,13 +947,16 @@ function App() {
               localNotice={localNotice}
               localHosting={localHosting}
               settingsSaveState={settingsSaveState}
+              serverSettingsSaveState={serverSettingsSaveState}
               moderation={moderation}
+              perks={currentPerks}
               messages={messages}
               moderationNotice={moderationNotice}
               onReportStatusChange={updateReport}
               onDeleteMessage={deleteMessage}
               onToggleAutoMod={toggleAutoMod}
               onSettingChange={updateSetting}
+              onServerSettingsSave={saveServerSettings}
               version={version}
             />
           </aside>
@@ -797,12 +990,14 @@ function ChatHero({
   channel,
   dmUser,
   guild,
+  perks,
   eventCount,
   memberCount
 }: {
   channel: Channel | null;
   dmUser: User | null;
   guild: Guild;
+  perks: GuildPerks;
   eventCount: number;
   memberCount: number;
 }) {
@@ -850,6 +1045,12 @@ function ChatHero({
         <span>
           <Sparkles size={15} /> {guild.features.length} features
         </span>
+        <span>
+          <Upload size={15} /> {perks.uploadLimitMb} MB uploads
+        </span>
+        <span>
+          <Video size={15} /> HD stream
+        </span>
       </div>
     </section>
   );
@@ -858,12 +1059,14 @@ function ChatHero({
 function MessageRow({
   message,
   author,
+  serverTag,
   onReport,
   onDelete,
   onReact
 }: {
   message: Message;
   author: User;
+  serverTag: string;
   onReport: () => void;
   onDelete: () => void;
   onReact: (emoji: string) => void;
@@ -874,6 +1077,7 @@ function MessageRow({
       <div className="message-body">
         <header>
           <strong>{author.name}</strong>
+          <span className="author-tag">{author.serverTag || serverTag}</span>
           {author.bot ? <span className="bot-pill">BOT</span> : null}
           <time>{message.timestamp}</time>
           {message.edited ? <span>edited</span> : null}
@@ -940,13 +1144,16 @@ function InspectorBody({
   localNotice,
   localHosting,
   settingsSaveState,
+  serverSettingsSaveState,
   moderation,
+  perks,
   messages,
   moderationNotice,
   onReportStatusChange,
   onDeleteMessage,
   onToggleAutoMod,
   onSettingChange,
+  onServerSettingsSave,
   version
 }: {
   view: InspectorView;
@@ -960,13 +1167,16 @@ function InspectorBody({
   localNotice: string;
   localHosting: LocalHostingState | null;
   settingsSaveState: "idle" | "saving" | "saved" | "error";
+  serverSettingsSaveState: "idle" | "saving" | "saved" | "error";
   moderation: ModerationState;
+  perks: GuildPerks;
   messages: Message[];
   moderationNotice: string;
   onReportStatusChange: (reportId: string, status: "resolved" | "dismissed") => void;
   onDeleteMessage: (messageId: string) => void;
   onToggleAutoMod: (key: keyof AutoModSettings) => void;
   onSettingChange: (key: SettingsKey) => void;
+  onServerSettingsSave: (input: ServerSettingsInput) => Promise<void>;
   version: string;
 }) {
   if (view === "roles") {
@@ -975,7 +1185,16 @@ function InspectorBody({
         <PanelHeader icon={Crown} title="Roles" actionIcon={Plus} />
         <div className="role-list">
           {guild.roles.map((role) => (
-            <section key={role.id} className="role-row">
+            <section
+              key={role.id}
+              className={classNames("role-row", perks.enhancedRoleStyles && "enhanced-role")}
+              style={
+                {
+                  "--role-color": role.color,
+                  "--role-accent": guild.accent
+                } as React.CSSProperties
+              }
+            >
               <span style={{ background: role.color }} />
               <div>
                 <strong>{role.name}</strong>
@@ -994,6 +1213,95 @@ function InspectorBody({
                 <small>{user.roleIds[0]}</small>
               </div>
               <PresenceDot status={user.status} />
+            </section>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (view === "perks") {
+    const perkCards = [
+      {
+        icon: Upload,
+        title: `${perks.uploadLimitMb} MB uploads`,
+        detail: "Local file metadata is free for every member.",
+        active: true
+      },
+      {
+        icon: Video,
+        title: "HD streaming",
+        detail: perks.hdStreaming ? "High quality stream controls are unlocked." : "Stream controls are off.",
+        active: perks.hdStreaming
+      },
+      {
+        icon: Smile,
+        title: "Custom emoji",
+        detail: perks.customEmoji ? "Server emoji and shortcode reactions work anywhere locally." : "Emoji perks off.",
+        active: perks.customEmoji
+      },
+      {
+        icon: Sparkles,
+        title: "Custom stickers",
+        detail: perks.customStickers ? "Sticker shortcuts are unlocked in the composer." : "Sticker perks off.",
+        active: perks.customStickers
+      },
+      {
+        icon: BadgeCheck,
+        title: "Server tag",
+        detail: `${perks.serverTag} appears in chat and profiles without boosts.`,
+        active: Boolean(perks.serverTag)
+      },
+      {
+        icon: Palette,
+        title: "Server theme",
+        detail: perks.serverTheme ? "This server color themes the shell for everyone here." : "Theme perk off.",
+        active: perks.serverTheme
+      },
+      {
+        icon: Crown,
+        title: "Enhanced roles",
+        detail: perks.enhancedRoleStyles ? "Role rows use premium-style color treatment." : "Role styles off.",
+        active: perks.enhancedRoleStyles
+      },
+      {
+        icon: Radio,
+        title: "Soundboard",
+        detail: perks.soundboard ? "Soundboard slots are available to local voice rooms." : "Soundboard off.",
+        active: perks.soundboard
+      },
+      {
+        icon: UserPlus,
+        title: "Profile effects",
+        detail: perks.profileEffects ? "Animated-profile-style effects are available free." : "Profile effects off.",
+        active: perks.profileEffects
+      }
+    ];
+
+    return (
+      <div className="inspector-body">
+        <PanelHeader icon={Sparkles} title="Free Perks" />
+        <section className="perks-hero">
+          <div>
+            <strong>All premium-style features are unlocked</strong>
+            <span>No subscriptions, boosts, paid roles, or checkout flow. Everything is local-first and free.</span>
+          </div>
+          <b>{perks.serverTag}</b>
+        </section>
+        <div className="metric-grid">
+          <Metric icon={Zap} label="Perk level" value={String(perks.tier)} />
+          <Metric icon={Upload} label="Upload MB" value={String(perks.uploadLimitMb)} />
+          <Metric icon={Video} label="Streaming" value={perks.hdStreaming ? "HD" : "Off"} />
+        </div>
+        <div className="perk-grid">
+          {perkCards.map((perk) => (
+            <section key={perk.title} className={classNames("perk-card", perk.active && "active")}>
+              <perk.icon size={18} />
+              <div>
+                <strong>{perk.title}</strong>
+                <span>{perk.detail}</span>
+              </div>
+              <CheckCircle2 size={16} />
             </section>
           ))}
         </div>
@@ -1119,7 +1427,15 @@ function InspectorBody({
   if (view === "settings") {
     return (
       <div className="inspector-body">
-        <PanelHeader icon={Settings} title="Settings" />
+        <ServerSettingsPanel
+          guild={guild}
+          perks={perks}
+          apiOnline={apiOnline}
+          localHosting={localHosting}
+          saveState={serverSettingsSaveState}
+          onSave={onServerSettingsSave}
+        />
+        <PanelHeader icon={Settings} title="Desktop Settings" />
         <PanelHeader icon={Palette} title="Appearance" />
         <div className="settings-list">
           <ToggleRow
@@ -1257,6 +1573,276 @@ function InspectorBody({
         </section>
       </div>
     </div>
+  );
+}
+
+function ServerSettingsPanel({
+  guild,
+  perks,
+  apiOnline,
+  localHosting,
+  saveState,
+  onSave
+}: {
+  guild: Guild;
+  perks: GuildPerks;
+  apiOnline: boolean;
+  localHosting: LocalHostingState | null;
+  saveState: "idle" | "saving" | "saved" | "error";
+  onSave: (input: ServerSettingsInput) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState<ServerSettingsInput>(() => createServerSettingsDraft(guild, perks));
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setDraft(createServerSettingsDraft(guild, perks));
+    setError("");
+  }, [guild, perks]);
+
+  const updateDraft = (patch: Partial<Omit<ServerSettingsInput, "settings">>) => {
+    setDraft((current) => ({
+      ...current,
+      ...patch
+    }));
+  };
+
+  const updateGuildSetting = <Key extends keyof GuildSettings>(key: Key, value: GuildSettings[Key]) => {
+    setDraft((current) => ({
+      ...current,
+      settings: {
+        ...current.settings,
+        [key]: value
+      }
+    }));
+  };
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+
+    if (draft.name.trim().length < 2) {
+      setError("Use at least 2 characters for the server name.");
+      return;
+    }
+
+    if (!/^#[0-9a-f]{6}$/i.test(draft.accent)) {
+      setError("Use a valid hex color.");
+      return;
+    }
+
+    try {
+      await onSave({
+        ...draft,
+        name: draft.name.trim(),
+        initials: sanitizeInitials(draft.initials),
+        serverTag: sanitizeInitials(draft.serverTag).slice(0, 4),
+        settings: {
+          ...draft.settings,
+          description: draft.settings.description.trim().slice(0, 180),
+          vanitySlug: slugify(draft.settings.vanitySlug)
+        }
+      });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Unable to save server settings.");
+    }
+  };
+
+  const channelOptions = guild.channels.map((channel) => ({
+    id: channel.id,
+    label: `#${channel.name}`
+  }));
+
+  return (
+    <form className="server-settings-form" onSubmit={submit}>
+      <PanelHeader icon={Shield} title="Server Settings" />
+      <div className="settings-form-grid">
+        <label className="settings-field wide">
+          <span>Server name</span>
+          <input value={draft.name} onChange={(event) => updateDraft({ name: event.target.value })} />
+        </label>
+        <label className="settings-field">
+          <span>Icon initials</span>
+          <input
+            value={draft.initials}
+            maxLength={4}
+            onChange={(event) => updateDraft({ initials: sanitizeInitials(event.target.value) })}
+          />
+        </label>
+        <label className="settings-field">
+          <span>Server tag</span>
+          <input
+            value={draft.serverTag}
+            maxLength={4}
+            onChange={(event) => updateDraft({ serverTag: sanitizeInitials(event.target.value).slice(0, 4) })}
+          />
+        </label>
+        <label className="settings-field wide">
+          <span>Description</span>
+          <textarea
+            value={draft.settings.description}
+            maxLength={180}
+            onChange={(event) => updateGuildSetting("description", event.target.value)}
+          />
+        </label>
+      </div>
+
+      <PanelHeader icon={Palette} title="Server Theme" />
+      <div className="accent-picker">
+        {accentSwatches.map((color) => (
+          <button
+            key={color}
+            type="button"
+            className={classNames(draft.accent.toLowerCase() === color && "selected")}
+            style={{ "--swatch": color } as React.CSSProperties}
+            title={color}
+            aria-label={`Use color ${color}`}
+            onClick={() => updateDraft({ accent: color })}
+          />
+        ))}
+        <label className="settings-field">
+          <span>Accent</span>
+          <input value={draft.accent} onChange={(event) => updateDraft({ accent: event.target.value })} />
+        </label>
+      </div>
+
+      <PanelHeader icon={Hash} title="Default Channels" />
+      <div className="settings-form-grid">
+        <label className="settings-field">
+          <span>Rules channel</span>
+          <select
+            value={draft.settings.rulesChannelId}
+            onChange={(event) => updateGuildSetting("rulesChannelId", event.target.value)}
+          >
+            {channelOptions.map((channel) => (
+              <option key={channel.id} value={channel.id}>
+                {channel.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="settings-field">
+          <span>System channel</span>
+          <select
+            value={draft.settings.systemChannelId}
+            onChange={(event) => updateGuildSetting("systemChannelId", event.target.value)}
+          >
+            {channelOptions.map((channel) => (
+              <option key={channel.id} value={channel.id}>
+                {channel.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <PanelHeader icon={Shield} title="Access" />
+      <div className="settings-form-grid">
+        <label className="settings-field">
+          <span>Notifications</span>
+          <select
+            value={draft.settings.defaultNotificationLevel}
+            onChange={(event) =>
+              updateGuildSetting("defaultNotificationLevel", event.target.value as GuildSettings["defaultNotificationLevel"])
+            }
+          >
+            <option value="mentions">Mentions only</option>
+            <option value="all">All messages</option>
+          </select>
+        </label>
+        <label className="settings-field">
+          <span>Verification</span>
+          <select
+            value={draft.settings.verificationLevel}
+            onChange={(event) => updateGuildSetting("verificationLevel", event.target.value as GuildSettings["verificationLevel"])}
+          >
+            <option value="none">None</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </label>
+        <label className="settings-field wide">
+          <span>Media filter</span>
+          <select
+            value={draft.settings.explicitMediaFilter}
+            onChange={(event) =>
+              updateGuildSetting("explicitMediaFilter", event.target.value as GuildSettings["explicitMediaFilter"])
+            }
+          >
+            <option value="off">Off</option>
+            <option value="members_without_roles">Members without roles</option>
+            <option value="all_members">All members</option>
+          </select>
+        </label>
+        <label className="settings-field wide">
+          <span>Vanity slug</span>
+          <input
+            value={draft.settings.vanitySlug}
+            onChange={(event) => updateGuildSetting("vanitySlug", event.target.value)}
+          />
+        </label>
+      </div>
+
+      <div className="settings-list">
+        <ToggleRow
+          icon={Users}
+          label="Community server"
+          checked={draft.settings.communityEnabled}
+          onClick={() => updateGuildSetting("communityEnabled", !draft.settings.communityEnabled)}
+        />
+        <ToggleRow
+          icon={Compass}
+          label="Local discovery"
+          checked={draft.settings.discoveryEnabled}
+          onClick={() => updateGuildSetting("discoveryEnabled", !draft.settings.discoveryEnabled)}
+        />
+        <ToggleRow
+          icon={Inbox}
+          label="Welcome screen"
+          checked={draft.settings.welcomeScreenEnabled}
+          onClick={() => updateGuildSetting("welcomeScreenEnabled", !draft.settings.welcomeScreenEnabled)}
+        />
+        <ToggleRow
+          icon={UserPlus}
+          label="Member invites"
+          checked={draft.settings.allowInvites}
+          onClick={() => updateGuildSetting("allowInvites", !draft.settings.allowInvites)}
+        />
+        <ToggleRow
+          icon={Hash}
+          label="Member channel creation"
+          checked={draft.settings.everyoneCanCreateChannels}
+          onClick={() => updateGuildSetting("everyoneCanCreateChannels", !draft.settings.everyoneCanCreateChannels)}
+        />
+        <ToggleRow
+          icon={Lock}
+          label="Require 2FA for moderation"
+          checked={draft.settings.require2faModeration}
+          onClick={() => updateGuildSetting("require2faModeration", !draft.settings.require2faModeration)}
+        />
+      </div>
+
+      {error ? <p className="dialog-error settings-error">{error}</p> : null}
+      <div className={classNames("settings-status", saveState)}>
+        {saveState === "saving" ? "Saving server settings" : null}
+        {saveState === "saved" ? "Server settings saved locally" : null}
+        {saveState === "error" ? "Server settings could not be saved" : null}
+        {saveState === "idle" ? (apiOnline ? "Server settings are saved to the local host" : "Server settings are in memory until host reconnects") : null}
+      </div>
+
+      <div className="settings-card">
+        <Globe2 size={19} />
+        <div>
+          <strong>{guild.hosting?.apiBaseUrl ?? localHosting?.apiBaseUrl ?? "Local host"}</strong>
+          <span>{guild.hosting?.dataPath ?? localHosting?.dataDir ?? "Using bundled seed data"}</span>
+        </div>
+      </div>
+
+      <button className="primary-action wide-save" type="submit" disabled={saveState === "saving"}>
+        <CheckCircle2 size={17} />
+        {saveState === "saving" ? "Saving" : "Save server settings"}
+      </button>
+    </form>
   );
 }
 
@@ -1451,6 +2037,7 @@ function CreateChannelDialog({
         <div className="template-grid channel-type-grid">
           <ChannelTypeButton active={type === "text"} icon={Hash} title="Text" detail="Messages and threads" onClick={() => setType("text")} />
           <ChannelTypeButton active={type === "voice"} icon={Volume2} title="Voice" detail="Local voice room" onClick={() => setType("voice")} />
+          <ChannelTypeButton active={type === "stage"} icon={Radio} title="Stage" detail="Live audio events" onClick={() => setType("stage")} />
           <ChannelTypeButton active={type === "forum"} icon={MessageCircle} title="Forum" detail="Topic posts" onClick={() => setType("forum")} />
           <ChannelTypeButton active={type === "announcement"} icon={Megaphone} title="Announcement" detail="Read-only updates" onClick={() => setType("announcement")} />
           <ChannelTypeButton active={type === "rules"} icon={Shield} title="Rules" detail="Guidelines page" onClick={() => setType("rules")} />
@@ -1532,7 +2119,7 @@ function CommandPalette({
               <span>#{channel.name}</span>
             </button>
           ))}
-          {(["activity", "roles", "moderation", "apps", "settings"] as InspectorView[]).map((view) => (
+          {(["activity", "roles", "perks", "moderation", "apps", "settings"] as InspectorView[]).map((view) => (
             <button key={view} onClick={() => onSelectInspector(view)}>
               <SlidersHorizontal size={16} />
               <span>{capitalize(view)}</span>
@@ -1666,7 +2253,7 @@ function ToggleRow({
   onClick: () => void;
 }) {
   return (
-    <button className="toggle-row" onClick={onClick}>
+    <button type="button" className="toggle-row" onClick={onClick}>
       <Icon size={17} />
       <span>{label}</span>
       <b className={classNames("toggle", checked && "checked")}>
@@ -1683,7 +2270,11 @@ function ChannelGlyph({ type }: { type: ChannelType }) {
 
 function Avatar({ user, size }: { user: User; size: "sm" | "md" | "lg" }) {
   return (
-    <span className={classNames("avatar", `avatar-${size}`)} style={{ "--avatar-color": user.accent } as React.CSSProperties}>
+    <span
+      className={classNames("avatar", `avatar-${size}`, user.profileEffect && "profile-effect")}
+      style={{ "--avatar-color": user.accent } as React.CSSProperties}
+      title={user.avatarDecoration ? `${user.name} / ${user.avatarDecoration}` : user.name}
+    >
       {user.avatar}
       <PresenceDot status={user.status} />
     </span>
@@ -1737,41 +2328,48 @@ function toggleReaction(reactions: Message["reactions"], emoji: string) {
 
 function createFallbackGuild(name: string): Guild {
   const id = `g-local-${Date.now()}`;
+  const channels: Channel[] = [
+    {
+      id: `c-local-welcome-${Date.now()}`,
+      name: "welcome",
+      type: "rules",
+      category: "Start Here",
+      topic: `${name} is available in memory until the local host comes online.`
+    },
+    {
+      id: `c-local-general-${Date.now()}`,
+      name: "general",
+      type: "text",
+      category: "Text Channels",
+      topic: `General chat for ${name}.`
+    },
+    {
+      id: `c-local-lounge-${Date.now()}`,
+      name: "Lounge",
+      type: "voice",
+      category: "Voice Channels",
+      topic: "Voice placeholder.",
+      participants: []
+    }
+  ];
+
   return {
     id,
     name,
     initials: initialsFor(name),
     accent: "#64d2b8",
-    boostLevel: 0,
-    features: ["Community", "Local", "Offline"],
+    boostLevel: 3,
+    features: ["Community", "Local", "Offline", "Free Perks"],
+    perks: {
+      ...defaultGuildPerks,
+      serverTag: initialsFor(name).slice(0, 4)
+    },
     roles: [
       { id: "owner", name: "Owner", color: "#f6c85f", permissions: ["Administrator"] },
       { id: "member", name: "Member", color: "#b7bcc9", permissions: ["Send messages", "Join voice"] }
     ],
-    channels: [
-      {
-        id: `c-local-welcome-${Date.now()}`,
-        name: "welcome",
-        type: "rules",
-        category: "Start Here",
-        topic: `${name} is available in memory until the local host comes online.`
-      },
-      {
-        id: `c-local-general-${Date.now()}`,
-        name: "general",
-        type: "text",
-        category: "Text Channels",
-        topic: `General chat for ${name}.`
-      },
-      {
-        id: `c-local-lounge-${Date.now()}`,
-        name: "Lounge",
-        type: "voice",
-        category: "Voice Channels",
-        topic: "Voice placeholder.",
-        participants: []
-      }
-    ]
+    channels,
+    settings: defaultGuildSettingsFor(name, channels)
   };
 }
 
@@ -1783,7 +2381,7 @@ function createFallbackChannel(input: CreateChannelInput): Channel {
     type: input.type,
     category: input.category,
     topic: input.topic || defaultTopicForChannel(input.type, name),
-    participants: input.type === "voice" ? [] : undefined
+    participants: input.type === "voice" || input.type === "stage" ? [] : undefined
   };
 }
 
@@ -1792,16 +2390,120 @@ function addChannelToGuild(guilds: Guild[], guildId: string, channel: Channel) {
     guild.id === guildId
       ? {
           ...guild,
-          channels: [...guild.channels, channel]
+          channels: [...guild.channels, channel],
+          settings: getGuildSettings({
+            ...guild,
+            channels: [...guild.channels, channel]
+          })
         }
       : guild
   );
+}
+
+function updateGuildInList(guilds: Guild[], nextGuild: Guild) {
+  return guilds.map((guild) => (guild.id === nextGuild.id ? nextGuild : guild));
+}
+
+function createServerSettingsDraft(guild: Guild, perks: GuildPerks): ServerSettingsInput {
+  return {
+    name: guild.name,
+    initials: sanitizeInitials(guild.initials || initialsFor(guild.name)),
+    accent: guild.accent,
+    serverTag: sanitizeInitials(perks.serverTag || guild.initials).slice(0, 4),
+    settings: getGuildSettings(guild)
+  };
+}
+
+function mergeGuildSettings(guild: Guild, input: ServerSettingsInput): Guild {
+  const nextGuild = {
+    ...guild,
+    name: input.name.trim(),
+    initials: sanitizeInitials(input.initials || initialsFor(input.name)),
+    accent: /^#[0-9a-f]{6}$/i.test(input.accent) ? input.accent.toLowerCase() : guild.accent,
+    perks: {
+      ...getGuildPerks(guild),
+      serverTag: sanitizeInitials(input.serverTag || guild.initials).slice(0, 4)
+    },
+    settings: {
+      ...getGuildSettings(guild),
+      ...input.settings,
+      description: input.settings.description.trim().slice(0, 180),
+      vanitySlug: slugify(input.settings.vanitySlug)
+    }
+  };
+
+  return {
+    ...nextGuild,
+    settings: getGuildSettings(nextGuild)
+  };
+}
+
+function getGuildSettings(guild: Guild): GuildSettings {
+  const base = defaultGuildSettingsFor(guild.name, guild.channels);
+  const current = guild.settings ?? base;
+  const channelIds = new Set(guild.channels.map((channel) => channel.id));
+  const rulesChannelId = channelIds.has(current.rulesChannelId) ? current.rulesChannelId : base.rulesChannelId;
+  const systemChannelId = channelIds.has(current.systemChannelId) ? current.systemChannelId : base.systemChannelId;
+
+  return {
+    ...base,
+    ...current,
+    description: (current.description || base.description).slice(0, 180),
+    rulesChannelId,
+    systemChannelId,
+    defaultNotificationLevel: current.defaultNotificationLevel === "all" ? "all" : "mentions",
+    verificationLevel: ["none", "low", "medium", "high"].includes(current.verificationLevel)
+      ? current.verificationLevel
+      : base.verificationLevel,
+    explicitMediaFilter: ["off", "members_without_roles", "all_members"].includes(current.explicitMediaFilter)
+      ? current.explicitMediaFilter
+      : base.explicitMediaFilter,
+    communityEnabled: current.communityEnabled !== false,
+    discoveryEnabled: Boolean(current.discoveryEnabled),
+    welcomeScreenEnabled: current.welcomeScreenEnabled !== false,
+    allowInvites: current.allowInvites !== false,
+    everyoneCanCreateChannels: Boolean(current.everyoneCanCreateChannels),
+    require2faModeration: current.require2faModeration !== false,
+    vanitySlug: slugify(current.vanitySlug || base.vanitySlug)
+  };
+}
+
+function defaultGuildSettingsFor(name: string, channels: Channel[]): GuildSettings {
+  const firstChannel = channels[0]?.id ?? "";
+  const rulesChannelId = channels.find((channel) => channel.type === "rules")?.id ?? firstChannel;
+  const systemChannelId =
+    channels.find((channel) => channel.type === "announcement")?.id ??
+    channels.find((channel) => channel.type === "text")?.id ??
+    firstChannel;
+
+  return {
+    description: `${name} is hosted locally on this machine.`,
+    rulesChannelId,
+    systemChannelId,
+    defaultNotificationLevel: "mentions",
+    verificationLevel: "low",
+    explicitMediaFilter: "members_without_roles",
+    communityEnabled: true,
+    discoveryEnabled: false,
+    welcomeScreenEnabled: true,
+    allowInvites: true,
+    everyoneCanCreateChannels: false,
+    require2faModeration: true,
+    vanitySlug: slugify(name)
+  };
+}
+
+function sanitizeInitials(value: string) {
+  return value.replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 4) || "OG";
 }
 
 function defaultChannelTypeForCategory(category: string): CreateChannelInput["type"] {
   const normalized = category.toLowerCase();
   if (normalized.includes("voice")) {
     return "voice";
+  }
+  if (normalized.includes("stage")) {
+    return "stage";
   }
   if (normalized.includes("start") || normalized.includes("rules")) {
     return "rules";
@@ -1814,6 +2516,9 @@ function defaultTopicForChannel(type: CreateChannelInput["type"], name: string) 
   if (type === "voice") {
     return `Voice room for ${channelName}.`;
   }
+  if (type === "stage") {
+    return `Stage room for ${channelName}.`;
+  }
   if (type === "forum") {
     return `Forum posts for ${channelName}.`;
   }
@@ -1824,6 +2529,37 @@ function defaultTopicForChannel(type: CreateChannelInput["type"], name: string) 
     return `Guidelines for ${channelName}.`;
   }
   return `Discussion for ${channelName}.`;
+}
+
+function getGuildPerks(guild: Guild): GuildPerks {
+  const baseTag = initialsFor(guild.name).slice(0, 4);
+  const current = guild.perks ?? defaultGuildPerks;
+  return {
+    ...defaultGuildPerks,
+    ...current,
+    tier: Math.max(current.tier ?? guild.boostLevel ?? defaultGuildPerks.tier, 3),
+    uploadLimitMb: Math.max(current.uploadLimitMb ?? defaultGuildPerks.uploadLimitMb, 500),
+    serverTag: String(current.serverTag || baseTag || defaultGuildPerks.serverTag).slice(0, 4).toUpperCase(),
+    hdStreaming: true,
+    customEmoji: true,
+    customStickers: true,
+    animatedAvatars: true,
+    profileEffects: true,
+    enhancedRoleStyles: true,
+    serverTheme: true,
+    soundboard: true,
+    vanityInvite: true
+  };
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${Math.max(1, Math.round(value / 1024))} KB`;
+  }
+  return `${Math.max(1, Math.round(value / (1024 * 1024)))} MB`;
 }
 
 function slugify(value: string) {

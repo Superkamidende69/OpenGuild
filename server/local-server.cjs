@@ -18,13 +18,30 @@ const defaultSettings = {
   showUnreadBadges: true,
   developerMode: false
 };
-const allowedChannelTypes = new Set(["text", "voice", "forum", "announcement", "rules"]);
+const allowedChannelTypes = new Set(["text", "voice", "stage", "forum", "announcement", "rules"]);
 const defaultAutoMod = {
   spamFilter: true,
   linkFilter: false,
   inviteFilter: false,
   capsFilter: false
 };
+const defaultGuildPerks = (tag = "OG") => ({
+  tier: 3,
+  uploadLimitMb: 500,
+  hdStreaming: true,
+  customEmoji: true,
+  customStickers: true,
+  animatedAvatars: true,
+  profileEffects: true,
+  serverTag: String(tag || "OG").slice(0, 4).toUpperCase(),
+  enhancedRoleStyles: true,
+  serverTheme: true,
+  soundboard: true,
+  vanityInvite: true
+});
+const allowedNotificationLevels = new Set(["all", "mentions"]);
+const allowedVerificationLevels = new Set(["none", "low", "medium", "high"]);
+const allowedExplicitMediaFilters = new Set(["off", "members_without_roles", "all_members"]);
 const allowedReportReasons = new Set(["spam", "harassment", "unsafe", "off-topic", "other"]);
 const allowedReportStatuses = new Set(["resolved", "dismissed"]);
 
@@ -47,8 +64,9 @@ function createSeedData(dataDir, port) {
       name: "OpenGuild Project",
       initials: "OG",
       accent: "#64d2b8",
-      boostLevel: 0,
-      features: ["Community", "Onboarding", "Discovery", "Self-hosted"],
+      boostLevel: 3,
+      features: ["Community", "Onboarding", "Discovery", "Self-hosted", "Free Perks"],
+      perks: defaultGuildPerks("OG"),
       hosting: localHosting("g-open", dataDir, port),
       roles: [
         { id: "owner", name: "Owner", color: "#f6c85f", permissions: ["Administrator"] },
@@ -109,8 +127,9 @@ function createSeedData(dataDir, port) {
       name: "Game Night",
       initials: "GN",
       accent: "#ff8a65",
-      boostLevel: 0,
-      features: ["Voice", "Streaming", "Clips"],
+      boostLevel: 3,
+      features: ["Voice", "Streaming", "Clips", "Free Perks"],
+      perks: defaultGuildPerks("GN"),
       hosting: localHosting("g-games", dataDir, port),
       roles: [
         { id: "member", name: "Member", color: "#b7bcc9", permissions: ["Send messages", "Join voice"] },
@@ -146,8 +165,9 @@ function createSeedData(dataDir, port) {
       name: "Builders Guild",
       initials: "BG",
       accent: "#b98cff",
-      boostLevel: 0,
-      features: ["Forum", "Threads", "Roles", "Automations"],
+      boostLevel: 3,
+      features: ["Forum", "Threads", "Roles", "Automations", "Free Perks"],
+      perks: defaultGuildPerks("BG"),
       hosting: localHosting("g-builders", dataDir, port),
       roles: [
         { id: "member", name: "Member", color: "#b7bcc9", permissions: ["Send messages"] },
@@ -182,7 +202,7 @@ function createSeedData(dataDir, port) {
 
   return {
     meta: {
-      schemaVersion: 1,
+      schemaVersion: 3,
       createdAt: startedAt,
       localOnly: true
     },
@@ -195,7 +215,10 @@ function createSeedData(dataDir, port) {
         status: "online",
         roleIds: ["owner", "engineer"],
         bio: "Building OpenGuild locally.",
-        accent: "#64d2b8"
+        accent: "#64d2b8",
+        profileEffect: "Aurora",
+        avatarDecoration: "Founder Ring",
+        serverTag: "OG"
       }
     ],
     guilds,
@@ -227,7 +250,8 @@ function loadDb(dataDir, port) {
   const dbPath = path.join(dataDir, "openguild.db.json");
 
   if (fs.existsSync(dbPath)) {
-    const db = JSON.parse(fs.readFileSync(dbPath, "utf8"));
+    const rawDb = fs.readFileSync(dbPath, "utf8").replace(/^\uFEFF/, "");
+    const db = JSON.parse(rawDb);
     db.guilds = db.guilds.map((guild) => ({
       ...guild,
       hosting: localHosting(guild.id, dataDir, port)
@@ -244,6 +268,11 @@ function loadDb(dataDir, port) {
 }
 
 function sanitizeDb(db) {
+  db.meta = {
+    ...(db.meta || {}),
+    schemaVersion: 3,
+    localOnly: true
+  };
   db.users = (db.users || []).filter((user) => !demoUserIds.has(user.id));
   if (!db.users.some((user) => user.id === "u-you")) {
     db.users.unshift({
@@ -254,9 +283,22 @@ function sanitizeDb(db) {
       status: "online",
       roleIds: ["owner"],
       bio: "Building OpenGuild locally.",
-      accent: "#64d2b8"
+      accent: "#64d2b8",
+      profileEffect: "Aurora",
+      avatarDecoration: "Founder Ring",
+      serverTag: "OG"
     });
   }
+  db.users = db.users.map((user) =>
+    user.id === "u-you"
+      ? {
+          ...user,
+          profileEffect: user.profileEffect || "Aurora",
+          avatarDecoration: user.avatarDecoration || "Founder Ring",
+          serverTag: user.serverTag || "OG"
+        }
+      : user
+  );
 
   db.directMessages = (db.directMessages || []).filter((dm) => !demoUserIds.has(dm.userId));
   db.events = [];
@@ -284,11 +326,17 @@ function sanitizeDb(db) {
 
   db.guilds = (db.guilds || []).map((guild) => ({
     ...guild,
-    boostLevel: typeof guild.boostLevel === "number" ? guild.boostLevel : 0,
-    features: (guild.features || []).filter((feature) => feature !== "Events" && feature !== "Verified Bots"),
+    boostLevel: Math.max(typeof guild.boostLevel === "number" ? guild.boostLevel : 0, 3),
+    features: Array.from(
+      new Set([
+        ...(guild.features || []).filter((feature) => feature !== "Events" && feature !== "Verified Bots"),
+        "Free Perks"
+      ])
+    ),
+    perks: normalizeGuildPerks(guild),
+    settings: normalizeGuildSettings(guild),
     roles: (guild.roles || []).filter((role) => role.id !== "bot"),
     channels: (guild.channels || [])
-      .filter((channel) => channel.type !== "stage")
       .map((channel) => ({
         ...channel,
         unread: undefined,
@@ -297,6 +345,93 @@ function sanitizeDb(db) {
           : channel.participants
       }))
   }));
+}
+
+function normalizeGuildPerks(guild) {
+  const base = defaultGuildPerks(guild.initials || initialsFor(guild.name || "OG"));
+  const current = guild.perks && typeof guild.perks === "object" ? guild.perks : {};
+  return {
+    ...base,
+    ...current,
+    tier: Math.max(Number(current.tier || guild.boostLevel || base.tier), 3),
+    uploadLimitMb: Math.max(Number(current.uploadLimitMb || base.uploadLimitMb), 500),
+    serverTag: String(current.serverTag || base.serverTag).slice(0, 4).toUpperCase(),
+    hdStreaming: true,
+    customEmoji: true,
+    customStickers: true,
+    animatedAvatars: true,
+    profileEffects: true,
+    enhancedRoleStyles: true,
+    serverTheme: true,
+    soundboard: true,
+    vanityInvite: true
+  };
+}
+
+function defaultGuildSettings(guild) {
+  const channels = Array.isArray(guild.channels) ? guild.channels : [];
+  const firstChannel = channels[0]?.id || "";
+  const rulesChannel = channels.find((channel) => channel.type === "rules")?.id || firstChannel;
+  const systemChannel =
+    channels.find((channel) => channel.type === "announcement")?.id ||
+    channels.find((channel) => channel.type === "text")?.id ||
+    firstChannel;
+
+  return {
+    description: `${guild.name || "This server"} is hosted locally on this machine.`,
+    rulesChannelId: rulesChannel,
+    systemChannelId: systemChannel,
+    defaultNotificationLevel: "mentions",
+    verificationLevel: "low",
+    explicitMediaFilter: "members_without_roles",
+    communityEnabled: true,
+    discoveryEnabled: false,
+    welcomeScreenEnabled: true,
+    allowInvites: true,
+    everyoneCanCreateChannels: false,
+    require2faModeration: true,
+    vanitySlug: slugify(guild.name || "local-server")
+  };
+}
+
+function normalizeGuildSettings(guild) {
+  const base = defaultGuildSettings(guild);
+  const current = guild.settings && typeof guild.settings === "object" ? guild.settings : {};
+  const channels = Array.isArray(guild.channels) ? guild.channels : [];
+  const channelIds = new Set(channels.map((channel) => channel.id));
+  const nextRulesChannelId = channelIds.has(current.rulesChannelId) ? current.rulesChannelId : base.rulesChannelId;
+  const nextSystemChannelId = channelIds.has(current.systemChannelId) ? current.systemChannelId : base.systemChannelId;
+
+  return {
+    ...base,
+    ...current,
+    description: sanitizeLimitedText(current.description || base.description, 180),
+    rulesChannelId: nextRulesChannelId,
+    systemChannelId: nextSystemChannelId,
+    defaultNotificationLevel: allowedNotificationLevels.has(current.defaultNotificationLevel)
+      ? current.defaultNotificationLevel
+      : base.defaultNotificationLevel,
+    verificationLevel: allowedVerificationLevels.has(current.verificationLevel)
+      ? current.verificationLevel
+      : base.verificationLevel,
+    explicitMediaFilter: allowedExplicitMediaFilters.has(current.explicitMediaFilter)
+      ? current.explicitMediaFilter
+      : base.explicitMediaFilter,
+    communityEnabled: current.communityEnabled !== false,
+    discoveryEnabled: Boolean(current.discoveryEnabled),
+    welcomeScreenEnabled: current.welcomeScreenEnabled !== false,
+    allowInvites: current.allowInvites !== false,
+    everyoneCanCreateChannels: Boolean(current.everyoneCanCreateChannels),
+    require2faModeration: current.require2faModeration !== false,
+    vanitySlug: slugify(current.vanitySlug || base.vanitySlug)
+  };
+}
+
+function sanitizeLimitedText(value, maxLength) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
 }
 
 function persistDb(dataDir, db) {
@@ -401,13 +536,14 @@ function createGuild(body, db, dataDir, port) {
     name,
     initials: initialsFor(name),
     accent,
-    boostLevel: 0,
+    boostLevel: 3,
     features:
       template === "gaming"
-        ? ["Voice", "Clips", "Roles"]
+        ? ["Voice", "Clips", "Roles", "Free Perks"]
         : template === "work"
-          ? ["Threads", "Forums", "Roles", "Audit Log"]
-          : ["Community", "Onboarding", "Moderation"],
+          ? ["Threads", "Forums", "Roles", "Audit Log", "Free Perks"]
+          : ["Community", "Onboarding", "Moderation", "Free Perks"],
+    perks: defaultGuildPerks(initialsFor(name)),
     hosting: localHosting(id, dataDir, port),
     roles: [
       { id: "owner", name: "Owner", color: "#f6c85f", permissions: ["Administrator"] },
@@ -453,6 +589,7 @@ function createGuild(body, db, dataDir, port) {
       }
     ]
   };
+  guild.settings = defaultGuildSettings(guild);
 
   db.guilds.push(guild);
   db.messages.push({
@@ -486,13 +623,74 @@ function createChannel(guildId, body, db, dataDir) {
     type,
     category: String(body.category || defaultCategoryForChannel(type)).trim() || defaultCategoryForChannel(type),
     topic: String(body.topic || `Local ${name} channel.`).trim() || `Local ${name} channel.`,
-    participants: type === "voice" ? [] : undefined
+    participants: type === "voice" || type === "stage" ? [] : undefined
   };
 
   guild.channels.push(channel);
   persistDb(dataDir, db);
   broadcast({ type: "channel.created", guildId, channel });
   return channel;
+}
+
+function updateGuildSettings(guildId, body, db, dataDir) {
+  const guild = db.guilds.find((candidate) => candidate.id === guildId);
+  if (!guild) {
+    const error = new Error("Server not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  if (typeof body.name === "string") {
+    const name = sanitizeLimitedText(body.name, 64);
+    if (name.length < 2) {
+      const error = new Error("Server name must be at least 2 characters.");
+      error.statusCode = 400;
+      throw error;
+    }
+    guild.name = name;
+  }
+
+  if (typeof body.initials === "string") {
+    guild.initials = sanitizeInitials(body.initials || initialsFor(guild.name));
+  } else {
+    guild.initials = sanitizeInitials(guild.initials || initialsFor(guild.name));
+  }
+
+  if (typeof body.accent === "string" && /^#[0-9a-f]{6}$/i.test(body.accent)) {
+    guild.accent = body.accent.toLowerCase();
+  }
+
+  if (typeof body.serverTag === "string") {
+    guild.perks = {
+      ...normalizeGuildPerks(guild),
+      serverTag: sanitizeInitials(body.serverTag || guild.initials).slice(0, 4)
+    };
+  } else {
+    guild.perks = normalizeGuildPerks(guild);
+  }
+
+  const incomingSettings = body.settings && typeof body.settings === "object" ? body.settings : {};
+  const currentSettings = normalizeGuildSettings(guild);
+  guild.settings = normalizeGuildSettings({
+    ...guild,
+    settings: {
+      ...currentSettings,
+      ...Object.fromEntries(
+        Object.entries(incomingSettings).filter(([key]) => Object.prototype.hasOwnProperty.call(currentSettings, key))
+      )
+    }
+  });
+
+  persistDb(dataDir, db);
+  broadcast({ type: "guild.settings.updated", guild });
+  return guild;
+}
+
+function sanitizeInitials(value) {
+  return String(value || "OG")
+    .replace(/[^a-z0-9]/gi, "")
+    .toUpperCase()
+    .slice(0, 4) || "OG";
 }
 
 function updateSettings(body, db, dataDir) {
@@ -640,6 +838,9 @@ function defaultCategoryForChannel(type) {
   if (type === "voice") {
     return "Voice Channels";
   }
+  if (type === "stage") {
+    return "Stage Channels";
+  }
   if (type === "rules" || type === "announcement") {
     return "Start Here";
   }
@@ -648,7 +849,8 @@ function defaultCategoryForChannel(type) {
 
 function createMessage(conversationId, body, db, dataDir) {
   const text = String(body.body || "").trim();
-  if (!text) {
+  const attachments = sanitizeAttachments(body.attachments);
+  if (!text && attachments.length === 0) {
     const error = new Error("Message body is required.");
     error.statusCode = 400;
     throw error;
@@ -658,15 +860,34 @@ function createMessage(conversationId, body, db, dataDir) {
     id: createId("m", text),
     channelId: conversationId,
     authorId: body.authorId || "u-you",
-    body: text,
+    body: text || "Shared an attachment",
     timestamp: formatTime(),
-    reactions: []
+    reactions: [],
+    attachments: attachments.length ? attachments : undefined
   };
 
   db.messages.push(message);
   persistDb(dataDir, db);
   broadcast({ type: "message.created", conversationId, message });
   return message;
+}
+
+function sanitizeAttachments(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .slice(0, 10)
+    .map((attachment) => {
+      const type = ["image", "video", "file"].includes(attachment?.type) ? attachment.type : "file";
+      return {
+        name: String(attachment?.name || "local-file").slice(0, 120),
+        type,
+        size: String(attachment?.size || "0 B").slice(0, 32)
+      };
+    })
+    .filter((attachment) => attachment.name.trim().length > 0);
 }
 
 function formatTime() {
@@ -787,6 +1008,14 @@ function createRequestHandler({ dataDir, port }) {
         const body = await readJson(req);
         const channel = createChannel(decodeURIComponent(channelMatch[1]), body, db, dataDir);
         sendJson(res, 201, { channel });
+        return;
+      }
+
+      const guildSettingsMatch = url.pathname.match(/^\/api\/guilds\/([^/]+)\/settings$/);
+      if (req.method === "PUT" && guildSettingsMatch) {
+        const body = await readJson(req);
+        const guild = updateGuildSettings(decodeURIComponent(guildSettingsMatch[1]), body, db, dataDir);
+        sendJson(res, 200, { guild });
         return;
       }
 

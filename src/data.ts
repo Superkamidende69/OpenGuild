@@ -1,4 +1,40 @@
-import type { DirectMessage, EventItem, Guild, Message, User } from "./types";
+import type { DirectMessage, EventItem, Guild, GuildPerks, GuildSettings, Message, User } from "./types";
+
+const freePerks = (tag: string): GuildPerks => ({
+  tier: 3,
+  uploadLimitMb: 500,
+  hdStreaming: true,
+  customEmoji: true,
+  customStickers: true,
+  animatedAvatars: true,
+  profileEffects: true,
+  serverTag: tag,
+  enhancedRoleStyles: true,
+  serverTheme: true,
+  soundboard: true,
+  vanityInvite: true
+});
+
+const serverSettings = (
+  description: string,
+  rulesChannelId: string,
+  systemChannelId: string,
+  vanitySlug: string
+): GuildSettings => ({
+  description,
+  rulesChannelId,
+  systemChannelId,
+  defaultNotificationLevel: "mentions",
+  verificationLevel: "low",
+  explicitMediaFilter: "members_without_roles",
+  communityEnabled: true,
+  discoveryEnabled: false,
+  welcomeScreenEnabled: true,
+  allowInvites: true,
+  everyoneCanCreateChannels: false,
+  require2faModeration: true,
+  vanitySlug
+});
 
 export const users: User[] = [
   {
@@ -9,7 +45,10 @@ export const users: User[] = [
     status: "online",
     roleIds: ["owner", "engineer"],
     bio: "Building OpenGuild locally.",
-    accent: "#64d2b8"
+    accent: "#64d2b8",
+    profileEffect: "Aurora",
+    avatarDecoration: "Founder Ring",
+    serverTag: "OG"
   }
 ];
 
@@ -19,8 +58,15 @@ export const guilds: Guild[] = [
     name: "OpenGuild Project",
     initials: "OG",
     accent: "#64d2b8",
-    boostLevel: 0,
-    features: ["Community", "Onboarding", "Discovery", "Self-hosted"],
+    boostLevel: 3,
+    features: ["Community", "Onboarding", "Discovery", "Self-hosted", "Free Perks"],
+    perks: freePerks("OG"),
+    settings: serverSettings(
+      "Local-first OpenGuild development server.",
+      "c-welcome",
+      "c-announcements",
+      "openguild"
+    ),
     roles: [
       { id: "owner", name: "Owner", color: "#f6c85f", permissions: ["Administrator"] },
       { id: "admin", name: "Admin", color: "#ff8a65", permissions: ["Manage server", "Manage roles"] },
@@ -79,8 +125,10 @@ export const guilds: Guild[] = [
     name: "Game Night",
     initials: "GN",
     accent: "#ff8a65",
-    boostLevel: 0,
-    features: ["Voice", "Streaming", "Clips"],
+    boostLevel: 3,
+    features: ["Voice", "Streaming", "Clips", "Free Perks"],
+    perks: freePerks("GN"),
+    settings: serverSettings("Local game nights, clips, and voice sessions.", "c-games-general", "c-clips", "game-night"),
     roles: [
       { id: "member", name: "Member", color: "#b7bcc9", permissions: ["Send messages", "Join voice"] },
       { id: "mod", name: "Moderator", color: "#e66b75", permissions: ["Manage messages"] }
@@ -115,8 +163,10 @@ export const guilds: Guild[] = [
     name: "Builders Guild",
     initials: "BG",
     accent: "#b98cff",
-    boostLevel: 0,
-    features: ["Forum", "Threads", "Roles", "Automations"],
+    boostLevel: 3,
+    features: ["Forum", "Threads", "Roles", "Automations", "Free Perks"],
+    perks: freePerks("BG"),
+    settings: serverSettings("Build notes, project threads, and local automations.", "c-builds", "c-builds", "builders"),
     roles: [
       { id: "member", name: "Member", color: "#b7bcc9", permissions: ["Send messages"] },
       { id: "engineer", name: "Engineer", color: "#64d2b8", permissions: ["Create channels"] }

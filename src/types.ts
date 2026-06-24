@@ -79,6 +79,41 @@ export interface ModerationState {
   automod: AutoModSettings;
 }
 
+export interface GuildPerks {
+  tier: number;
+  uploadLimitMb: number;
+  hdStreaming: boolean;
+  customEmoji: boolean;
+  customStickers: boolean;
+  animatedAvatars: boolean;
+  profileEffects: boolean;
+  serverTag: string;
+  enhancedRoleStyles: boolean;
+  serverTheme: boolean;
+  soundboard: boolean;
+  vanityInvite: boolean;
+}
+
+export type NotificationLevel = "all" | "mentions";
+export type VerificationLevel = "none" | "low" | "medium" | "high";
+export type ExplicitMediaFilter = "off" | "members_without_roles" | "all_members";
+
+export interface GuildSettings {
+  description: string;
+  rulesChannelId: string;
+  systemChannelId: string;
+  defaultNotificationLevel: NotificationLevel;
+  verificationLevel: VerificationLevel;
+  explicitMediaFilter: ExplicitMediaFilter;
+  communityEnabled: boolean;
+  discoveryEnabled: boolean;
+  welcomeScreenEnabled: boolean;
+  allowInvites: boolean;
+  everyoneCanCreateChannels: boolean;
+  require2faModeration: boolean;
+  vanitySlug: string;
+}
+
 export interface Guild {
   id: string;
   name: string;
@@ -86,6 +121,8 @@ export interface Guild {
   accent: string;
   boostLevel: number;
   features: string[];
+  perks: GuildPerks;
+  settings: GuildSettings;
   hosting?: {
     mode: "local";
     host: string;
@@ -107,6 +144,9 @@ export interface User {
   bio: string;
   accent: string;
   bot?: boolean;
+  profileEffect?: string;
+  avatarDecoration?: string;
+  serverTag?: string;
 }
 
 export interface Reaction {
