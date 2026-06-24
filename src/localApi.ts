@@ -8,11 +8,14 @@ import type {
   EventItem,
   Guild,
   GuildSettings,
+  Invite,
+  InviteRoute,
   Message,
   ModerationReport,
   ModerationReportReason,
   ModerationReportStatus,
   ModerationState,
+  Role,
   User
 } from "./types";
 
@@ -29,6 +32,7 @@ export interface LocalApiState {
   directMessages: DirectMessage[];
   messages: Message[];
   events: EventItem[];
+  invites: Invite[];
   settings: AppSettings;
   moderation: ModerationState;
   hosting: LocalHostingState;
@@ -52,6 +56,19 @@ export interface UpdateGuildSettingsInput {
   accent: string;
   serverTag: string;
   settings: GuildSettings;
+}
+
+export interface UpdateGuildRolesInput {
+  roles: Role[];
+  actorId: string;
+}
+
+export interface CreateInviteInput {
+  channelId: string;
+  maxUses: number | null;
+  expiresInHours: number | null;
+  temporary: boolean;
+  actorId: string;
 }
 
 export interface CreateReportInput {
@@ -131,6 +148,71 @@ export async function updateLocalGuildSettings(apiBaseUrl: string, guildId: stri
   }
 
   return (await response.json()) as { guild: Guild };
+}
+
+export async function updateLocalGuildRoles(apiBaseUrl: string, guildId: string, input: UpdateGuildRolesInput) {
+  const response = await fetch(`${apiBaseUrl}/api/guilds/${encodeURIComponent(guildId)}/roles`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Unable to save roles" }));
+    throw new Error(error.error || "Unable to save roles");
+  }
+
+  return (await response.json()) as { guild: Guild; users: User[]; moderation: ModerationState };
+}
+
+export async function createLocalInvite(apiBaseUrl: string, guildId: string, input: CreateInviteInput) {
+  const response = await fetch(`${apiBaseUrl}/api/guilds/${encodeURIComponent(guildId)}/invites`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Unable to create invite" }));
+    throw new Error(error.error || "Unable to create invite");
+  }
+
+  return (await response.json()) as { invite: Invite; invites: Invite[]; moderation: ModerationState };
+}
+
+export async function revokeLocalInvite(apiBaseUrl: string, guildId: string, inviteId: string, actorId: string) {
+  const response = await fetch(
+    `${apiBaseUrl}/api/guilds/${encodeURIComponent(guildId)}/invites/${encodeURIComponent(inviteId)}`,
+    {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ actorId })
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Unable to revoke invite" }));
+    throw new Error(error.error || "Unable to revoke invite");
+  }
+
+  return (await response.json()) as { invite: Invite; invites: Invite[]; moderation: ModerationState };
+}
+
+export async function resolveLocalInvite(apiBaseUrl: string, code: string) {
+  const response = await fetch(`${apiBaseUrl}/api/invites/${encodeURIComponent(code)}`);
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Unable to resolve invite" }));
+    throw new Error(error.error || "Unable to resolve invite");
+  }
+
+  return (await response.json()) as InviteRoute;
 }
 
 export async function updateLocalSettings(apiBaseUrl: string, settings: AppSettings) {

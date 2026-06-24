@@ -250,6 +250,11 @@ button,
   color: var(--text);
 }
 
+.icon-button.active {
+  background: color-mix(in srgb, var(--teal) 16%, var(--panel-strong));
+  color: var(--teal);
+}
+
 .sidebar-search {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -375,6 +380,50 @@ button,
   text-align: right;
 }
 
+.channel-stack {
+  display: grid;
+  gap: 2px;
+}
+
+.channel-stack.voice-connected .channel-button {
+  background: color-mix(in srgb, var(--teal) 12%, var(--panel-strong));
+  color: var(--text);
+}
+
+.voice-participant-list {
+  display: grid;
+  gap: 2px;
+  padding: 0 4px 5px 31px;
+}
+
+.voice-participant {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 3px 6px;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.voice-participant.self {
+  background: color-mix(in srgb, var(--teal) 9%, transparent);
+  color: var(--text);
+}
+
+.voice-participant span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-participant small {
+  color: var(--teal);
+  font-size: 11px;
+}
+
 .channel-glyph {
   color: currentColor;
   flex: 0 0 auto;
@@ -424,6 +473,35 @@ button,
   white-space: nowrap;
 }
 
+.voice-current-user {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 12px;
+  padding: 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--teal) 8%, #111319);
+}
+
+.voice-current-user strong,
+.voice-current-user span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-current-user strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.voice-current-user span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .voice-controls {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -453,6 +531,11 @@ button,
 .voice-controls button.active {
   color: var(--text);
   background: #3a404c;
+}
+
+.voice-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .voice-controls .disconnect {
@@ -1067,6 +1150,331 @@ button,
 .role-row.enhanced-role > span {
   background:
     linear-gradient(180deg, var(--role-color), var(--role-accent)) !important;
+}
+
+.role-settings-panel {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.role-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(132px, 0.82fr) minmax(0, 1.18fr);
+  gap: 10px;
+}
+
+.role-selector-list {
+  margin-bottom: 0;
+}
+
+.role-selector {
+  width: 100%;
+  color: var(--muted);
+  text-align: left;
+}
+
+.role-selector.selected,
+.role-selector:hover {
+  border-color: color-mix(in srgb, var(--role-color) 46%, var(--line-soft));
+  color: var(--text);
+}
+
+.role-add-button {
+  min-height: 40px;
+  color: #101311;
+}
+
+.role-editor-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.role-preview {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+}
+
+.role-preview > span {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--role-color) 28%, #20242c);
+  color: var(--role-color);
+  font-weight: 900;
+}
+
+.role-preview strong,
+.role-preview small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role-preview strong {
+  color: var(--text);
+}
+
+.role-preview small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.role-color-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.role-color-picker button {
+  width: 28px;
+  height: 28px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: var(--swatch);
+}
+
+.role-color-picker button.selected {
+  border-color: #ffffff;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--swatch) 45%, transparent);
+}
+
+.permission-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.permission-group {
+  display: grid;
+  gap: 7px;
+}
+
+.permission-group > strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.permission-group > div {
+  display: grid;
+  gap: 6px;
+}
+
+.permission-group button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #111319;
+  color: var(--muted);
+  text-align: left;
+}
+
+.permission-group button.selected {
+  border-color: color-mix(in srgb, var(--teal) 45%, var(--line-soft));
+  background: color-mix(in srgb, var(--teal) 12%, #111319);
+  color: var(--text);
+}
+
+.permission-group button:disabled {
+  cursor: default;
+  opacity: 0.66;
+}
+
+.permission-group span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.permission-group b {
+  color: var(--quiet);
+  font-size: 11px;
+}
+
+.role-editor-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.role-editor-actions .secondary-action:disabled {
+  cursor: default;
+  opacity: 0.52;
+}
+
+.invite-management-panel,
+.invite-create-form,
+.invite-resolve-form {
+  display: grid;
+  gap: 10px;
+}
+
+.invite-management-panel {
+  margin-bottom: 18px;
+}
+
+.invite-vanity-card,
+.invite-route-result {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.invite-route-result {
+  grid-template-columns: auto minmax(0, 1fr);
+  border-color: color-mix(in srgb, var(--teal) 45%, var(--line-soft));
+}
+
+.invite-vanity-card > svg,
+.invite-route-result > svg {
+  color: var(--teal);
+}
+
+.invite-vanity-card strong,
+.invite-vanity-card span,
+.invite-route-result strong,
+.invite-route-result span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.invite-vanity-card strong,
+.invite-route-result strong {
+  color: var(--text);
+}
+
+.invite-vanity-card span,
+.invite-route-result span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.invite-vanity-card button,
+.invite-row button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--muted);
+}
+
+.invite-vanity-card button:hover,
+.invite-row button:hover {
+  color: var(--text);
+  background: #3a404c;
+}
+
+.invite-list {
+  display: grid;
+  gap: 8px;
+}
+
+.invite-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.invite-row.inactive {
+  opacity: 0.68;
+}
+
+.invite-row strong,
+.invite-row span,
+.invite-row small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.invite-row strong {
+  color: var(--text);
+}
+
+.invite-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.invite-row small {
+  color: var(--quiet);
+  font-size: 11px;
+}
+
+.invite-row > b {
+  min-width: 58px;
+  color: var(--teal);
+  font-size: 11px;
+  text-align: right;
+}
+
+.invite-row.inactive > b {
+  color: var(--quiet);
+}
+
+.invite-row button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.invite-resolve-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.invite-resolve-row input {
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #111319;
+  color: var(--text);
+}
+
+.invite-resolve-row button {
+  display: inline-grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
 }
 
 .role-row strong,

@@ -42,6 +42,31 @@ const defaultGuildPerks = (tag = "OG") => ({
 const allowedNotificationLevels = new Set(["all", "mentions"]);
 const allowedVerificationLevels = new Set(["none", "low", "medium", "high"]);
 const allowedExplicitMediaFilters = new Set(["off", "members_without_roles", "all_members"]);
+const allowedRolePermissions = new Set([
+  "Administrator",
+  "View channels",
+  "Manage server",
+  "Manage roles",
+  "Manage channels",
+  "Create channels",
+  "Manage messages",
+  "Send messages",
+  "Attach files",
+  "Use custom emoji",
+  "Use custom stickers",
+  "Create threads",
+  "Mention everyone",
+  "Join voice",
+  "Speak",
+  "Stream",
+  "Use soundboard",
+  "Kick members",
+  "Ban members",
+  "Timeout members",
+  "View audit log",
+  "Manage webhooks",
+  "Use beta features"
+]);
 const allowedReportReasons = new Set(["spam", "harassment", "unsafe", "off-topic", "other"]);
 const allowedReportStatuses = new Set(["resolved", "dismissed"]);
 
@@ -69,11 +94,11 @@ function createSeedData(dataDir, port) {
       perks: defaultGuildPerks("OG"),
       hosting: localHosting("g-open", dataDir, port),
       roles: [
-        { id: "owner", name: "Owner", color: "#f6c85f", permissions: ["Administrator"] },
-        { id: "admin", name: "Admin", color: "#ff8a65", permissions: ["Manage server", "Manage roles"] },
-        { id: "mod", name: "Moderator", color: "#e66b75", permissions: ["Kick members", "Manage messages"] },
-        { id: "engineer", name: "Engineer", color: "#64d2b8", permissions: ["Create channels", "Use beta features"] },
-        { id: "member", name: "Member", color: "#b7bcc9", permissions: ["Send messages", "Join voice"] }
+        { id: "owner", name: "Owner", color: "#f6c85f", permissions: ["Administrator"], hoist: true, mentionable: false, position: 100, managed: true },
+        { id: "admin", name: "Admin", color: "#ff8a65", permissions: ["Manage server", "Manage roles"], hoist: true, mentionable: false, position: 80 },
+        { id: "mod", name: "Moderator", color: "#e66b75", permissions: ["Kick members", "Manage messages"], hoist: true, mentionable: true, position: 60 },
+        { id: "engineer", name: "Engineer", color: "#64d2b8", permissions: ["Create channels", "Use beta features"], hoist: true, mentionable: true, position: 40 },
+        { id: "member", name: "Member", color: "#b7bcc9", permissions: ["View channels", "Send messages", "Join voice"], hoist: false, mentionable: false, position: 0, managed: true }
       ],
       channels: [
         {
@@ -132,8 +157,8 @@ function createSeedData(dataDir, port) {
       perks: defaultGuildPerks("GN"),
       hosting: localHosting("g-games", dataDir, port),
       roles: [
-        { id: "member", name: "Member", color: "#b7bcc9", permissions: ["Send messages", "Join voice"] },
-        { id: "mod", name: "Moderator", color: "#e66b75", permissions: ["Manage messages"] }
+        { id: "mod", name: "Moderator", color: "#e66b75", permissions: ["Manage messages"], hoist: true, mentionable: true, position: 60 },
+        { id: "member", name: "Member", color: "#b7bcc9", permissions: ["View channels", "Send messages", "Join voice"], hoist: false, mentionable: false, position: 0, managed: true }
       ],
       channels: [
         {
@@ -170,8 +195,8 @@ function createSeedData(dataDir, port) {
       perks: defaultGuildPerks("BG"),
       hosting: localHosting("g-builders", dataDir, port),
       roles: [
-        { id: "member", name: "Member", color: "#b7bcc9", permissions: ["Send messages"] },
-        { id: "engineer", name: "Engineer", color: "#64d2b8", permissions: ["Create channels"] }
+        { id: "engineer", name: "Engineer", color: "#64d2b8", permissions: ["Create channels"], hoist: true, mentionable: true, position: 40 },
+        { id: "member", name: "Member", color: "#b7bcc9", permissions: ["View channels", "Send messages"], hoist: false, mentionable: false, position: 0, managed: true }
       ],
       channels: [
         {
@@ -202,7 +227,7 @@ function createSeedData(dataDir, port) {
 
   return {
     meta: {
-      schemaVersion: 3,
+      schemaVersion: 5,
       createdAt: startedAt,
       localOnly: true
     },
@@ -225,6 +250,7 @@ function createSeedData(dataDir, port) {
     directMessages: [],
     messages: [],
     events: [],
+    invites: [],
     settings: { ...defaultSettings },
     moderation: {
       reports: [],
@@ -270,7 +296,7 @@ function loadDb(dataDir, port) {
 function sanitizeDb(db) {
   db.meta = {
     ...(db.meta || {}),
-    schemaVersion: 3,
+    schemaVersion: 5,
     localOnly: true
   };
   db.users = (db.users || []).filter((user) => !demoUserIds.has(user.id));
@@ -324,26 +350,37 @@ function sanitizeDb(db) {
     (message) => !demoUserIds.has(message.authorId) && !String(message.channelId).startsWith("dm-")
   );
 
-  db.guilds = (db.guilds || []).map((guild) => ({
-    ...guild,
-    boostLevel: Math.max(typeof guild.boostLevel === "number" ? guild.boostLevel : 0, 3),
-    features: Array.from(
-      new Set([
-        ...(guild.features || []).filter((feature) => feature !== "Events" && feature !== "Verified Bots"),
-        "Free Perks"
-      ])
-    ),
-    perks: normalizeGuildPerks(guild),
-    settings: normalizeGuildSettings(guild),
-    roles: (guild.roles || []).filter((role) => role.id !== "bot"),
-    channels: (guild.channels || [])
-      .map((channel) => ({
-        ...channel,
-        unread: undefined,
-        participants: Array.isArray(channel.participants)
-          ? channel.participants.filter((participantId) => !demoUserIds.has(participantId))
-          : channel.participants
-      }))
+  db.guilds = (db.guilds || []).map((guild) => {
+    const normalizedGuild = {
+      ...guild,
+      boostLevel: Math.max(typeof guild.boostLevel === "number" ? guild.boostLevel : 0, 3),
+      features: Array.from(
+        new Set([
+          ...(guild.features || []).filter((feature) => feature !== "Events" && feature !== "Verified Bots"),
+          "Free Perks"
+        ])
+      ),
+      perks: normalizeGuildPerks(guild),
+      channels: (guild.channels || [])
+        .map((channel) => ({
+          ...channel,
+          unread: undefined,
+          participants: Array.isArray(channel.participants)
+            ? channel.participants.filter((participantId) => !demoUserIds.has(participantId))
+            : channel.participants
+        }))
+    };
+    normalizedGuild.settings = normalizeGuildSettings(normalizedGuild);
+    normalizedGuild.roles = normalizeGuildRoles(normalizedGuild.roles);
+    return normalizedGuild;
+  });
+
+  db.invites = normalizeInvites(db.invites, db.guilds);
+
+  const validRoleIds = new Set(db.guilds.flatMap((guild) => guild.roles.map((role) => role.id)));
+  db.users = db.users.map((user) => ({
+    ...user,
+    roleIds: Array.from(new Set([...(user.roleIds || []).filter((roleId) => validRoleIds.has(roleId)), "member"]))
   }));
 }
 
@@ -425,6 +462,85 @@ function normalizeGuildSettings(guild) {
     require2faModeration: current.require2faModeration !== false,
     vanitySlug: slugify(current.vanitySlug || base.vanitySlug)
   };
+}
+
+function normalizeGuildRoles(roles) {
+  const sourceRoles = Array.isArray(roles) ? roles.filter((role) => role?.id !== "bot") : [];
+  const normalized = sourceRoles
+    .map((role, index) => normalizeRole(role, index))
+    .filter(Boolean);
+  const byId = new Map(normalized.map((role) => [role.id, role]));
+
+  if (!byId.has("owner")) {
+    byId.set("owner", normalizeRole({
+      id: "owner",
+      name: "Owner",
+      color: "#f6c85f",
+      permissions: ["Administrator"],
+      hoist: true,
+      mentionable: false,
+      position: 100,
+      managed: true
+    }));
+  }
+
+  if (!byId.has("member")) {
+    byId.set("member", normalizeRole({
+      id: "member",
+      name: "Member",
+      color: "#b7bcc9",
+      permissions: ["View channels", "Send messages", "Join voice"],
+      hoist: false,
+      mentionable: false,
+      position: 0,
+      managed: true
+    }));
+  }
+
+  byId.set("owner", {
+    ...byId.get("owner"),
+    managed: true,
+    hoist: true,
+    position: Math.max(Number(byId.get("owner").position || 0), 100),
+    permissions: ["Administrator"]
+  });
+  byId.set("member", {
+    ...byId.get("member"),
+    managed: true,
+    position: 0
+  });
+
+  return Array.from(byId.values()).sort((a, b) => b.position - a.position || a.name.localeCompare(b.name));
+}
+
+function normalizeRole(role, fallbackPosition = 0) {
+  if (!role || typeof role !== "object") {
+    return null;
+  }
+
+  const id = sanitizeRoleId(role.id || role.name);
+  if (!id) {
+    return null;
+  }
+
+  const permissions = Array.isArray(role.permissions)
+    ? Array.from(new Set(role.permissions.filter((permission) => allowedRolePermissions.has(permission))))
+    : [];
+
+  return {
+    id,
+    name: sanitizeLimitedText(role.name || id, 40) || id,
+    color: typeof role.color === "string" && /^#[0-9a-f]{6}$/i.test(role.color) ? role.color.toLowerCase() : "#b7bcc9",
+    permissions,
+    hoist: Boolean(role.hoist),
+    mentionable: Boolean(role.mentionable),
+    position: Number.isFinite(Number(role.position)) ? Number(role.position) : fallbackPosition,
+    managed: role.managed === true || id === "owner" || id === "member"
+  };
+}
+
+function sanitizeRoleId(value) {
+  return slugify(String(value || "role")).slice(0, 40);
 }
 
 function sanitizeLimitedText(value, maxLength) {
@@ -546,9 +662,9 @@ function createGuild(body, db, dataDir, port) {
     perks: defaultGuildPerks(initialsFor(name)),
     hosting: localHosting(id, dataDir, port),
     roles: [
-      { id: "owner", name: "Owner", color: "#f6c85f", permissions: ["Administrator"] },
-      { id: "mod", name: "Moderator", color: "#e66b75", permissions: ["Manage messages", "Timeout members"] },
-      { id: "member", name: "Member", color: "#b7bcc9", permissions: ["Send messages", "Join voice"] }
+      { id: "owner", name: "Owner", color: "#f6c85f", permissions: ["Administrator"], hoist: true, mentionable: false, position: 100, managed: true },
+      { id: "mod", name: "Moderator", color: "#e66b75", permissions: ["Manage messages", "Timeout members"], hoist: true, mentionable: true, position: 60 },
+      { id: "member", name: "Member", color: "#b7bcc9", permissions: ["View channels", "Send messages", "Join voice"], hoist: false, mentionable: false, position: 0, managed: true }
     ],
     channels: [
       {
@@ -684,6 +800,286 @@ function updateGuildSettings(guildId, body, db, dataDir) {
   persistDb(dataDir, db);
   broadcast({ type: "guild.settings.updated", guild });
   return guild;
+}
+
+function updateGuildRoles(guildId, body, db, dataDir) {
+  const guild = db.guilds.find((candidate) => candidate.id === guildId);
+  if (!guild) {
+    const error = new Error("Server not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const incomingRoles = Array.isArray(body.roles) ? body.roles : [];
+  if (incomingRoles.length === 0) {
+    const error = new Error("At least one role is required.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const existingManagedRoles = new Map((guild.roles || []).filter((role) => role.managed).map((role) => [role.id, role]));
+  const nextRoles = normalizeGuildRoles([
+    ...incomingRoles,
+    ...Array.from(existingManagedRoles.values()).filter((role) => !incomingRoles.some((incoming) => incoming.id === role.id))
+  ]);
+
+  if (!nextRoles.some((role) => role.id === "owner") || !nextRoles.some((role) => role.id === "member")) {
+    const error = new Error("Owner and Member roles are required.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  guild.roles = nextRoles;
+
+  const validRoleIds = new Set(nextRoles.map((role) => role.id));
+  db.users = db.users.map((user) => ({
+    ...user,
+    roleIds: Array.from(new Set([...(user.roleIds || []).filter((roleId) => validRoleIds.has(roleId)), "member"]))
+  }));
+
+  addAuditEntry(db, guild.id, body.actorId || "u-you", "Roles updated", "roles", `${nextRoles.length} roles saved`);
+  persistDb(dataDir, db);
+  broadcast({ type: "guild.roles.updated", guild, users: db.users, moderation: db.moderation });
+  return guild;
+}
+
+function normalizeInvites(invites, guilds) {
+  if (!Array.isArray(invites)) {
+    return [];
+  }
+
+  const guildById = new Map(guilds.map((guild) => [guild.id, guild]));
+  const seenCodes = new Set();
+
+  return invites
+    .map((invite) => normalizeInvite(invite, guildById, seenCodes))
+    .filter(Boolean);
+}
+
+function normalizeInvite(invite, guildById, seenCodes = new Set()) {
+  if (!invite || typeof invite !== "object") {
+    return null;
+  }
+
+  const guild = guildById.get(String(invite.guildId || ""));
+  if (!guild) {
+    return null;
+  }
+
+  const channel = guild.channels.find((candidate) => candidate.id === invite.channelId) || guild.channels[0];
+  if (!channel) {
+    return null;
+  }
+
+  const code = sanitizeInviteCode(invite.code || createInviteCode(seenCodes));
+  if (!code || seenCodes.has(code)) {
+    return null;
+  }
+  seenCodes.add(code);
+
+  const maxUses = Number(invite.maxUses);
+  const uses = Math.max(0, Number(invite.uses || 0));
+  const expiresAt = typeof invite.expiresAt === "string" && !Number.isNaN(new Date(invite.expiresAt).getTime())
+    ? invite.expiresAt
+    : null;
+
+  return {
+    id: String(invite.id || createId("i", code)),
+    guildId: guild.id,
+    channelId: channel.id,
+    code,
+    inviterId: String(invite.inviterId || "u-you"),
+    uses,
+    maxUses: Number.isFinite(maxUses) && maxUses > 0 ? Math.min(10000, Math.floor(maxUses)) : null,
+    temporary: Boolean(invite.temporary),
+    createdAt: typeof invite.createdAt === "string" ? invite.createdAt : new Date().toISOString(),
+    expiresAt,
+    revoked: Boolean(invite.revoked)
+  };
+}
+
+function listGuildInvites(guildId, db) {
+  const guild = db.guilds.find((candidate) => candidate.id === guildId);
+  if (!guild) {
+    const error = new Error("Server not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return db.invites.filter((invite) => invite.guildId === guild.id);
+}
+
+function createInvite(guildId, body, db, dataDir, port) {
+  const guild = db.guilds.find((candidate) => candidate.id === guildId);
+  if (!guild) {
+    const error = new Error("Server not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  guild.settings = normalizeGuildSettings(guild);
+  if (!guild.settings.allowInvites) {
+    const error = new Error("Invites are disabled for this server.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const channel = guild.channels.find((candidate) => candidate.id === body.channelId) || guild.channels[0];
+  if (!channel) {
+    const error = new Error("Channel not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const existingCodes = new Set(db.invites.map((invite) => sanitizeInviteCode(invite.code)));
+  const maxUses = Number(body.maxUses);
+  const expiresInHours = Number(body.expiresInHours);
+  const invite = {
+    id: createId("i", `${guild.id} ${channel.id}`),
+    guildId: guild.id,
+    channelId: channel.id,
+    code: createInviteCode(existingCodes),
+    inviterId: String(body.actorId || "u-you"),
+    uses: 0,
+    maxUses: Number.isFinite(maxUses) && maxUses > 0 ? Math.min(10000, Math.floor(maxUses)) : null,
+    temporary: Boolean(body.temporary),
+    createdAt: new Date().toISOString(),
+    expiresAt: Number.isFinite(expiresInHours) && expiresInHours > 0
+      ? new Date(Date.now() + Math.min(8760, Math.floor(expiresInHours)) * 60 * 60 * 1000).toISOString()
+      : null,
+    revoked: false
+  };
+
+  db.invites.unshift(invite);
+  addAuditEntry(db, guild.id, invite.inviterId, "Invite created", `invite:${invite.code}`, `#${channel.name}`);
+  persistDb(dataDir, db);
+  broadcast({ type: "invite.created", invite, invites: listGuildInvites(guild.id, db), moderation: db.moderation });
+  return {
+    invite: withInviteUrl(invite, port),
+    invites: listGuildInvites(guild.id, db),
+    moderation: db.moderation
+  };
+}
+
+function revokeInvite(guildId, inviteId, body, db, dataDir) {
+  const guild = db.guilds.find((candidate) => candidate.id === guildId);
+  if (!guild) {
+    const error = new Error("Server not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const invite = db.invites.find((candidate) => candidate.guildId === guild.id && candidate.id === inviteId);
+  if (!invite) {
+    const error = new Error("Invite not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  invite.revoked = true;
+  addAuditEntry(db, guild.id, body.actorId || "u-you", "Invite revoked", `invite:${invite.code}`, invite.code);
+  persistDb(dataDir, db);
+  broadcast({ type: "invite.revoked", invite, invites: listGuildInvites(guild.id, db), moderation: db.moderation });
+  return {
+    invite,
+    invites: listGuildInvites(guild.id, db),
+    moderation: db.moderation
+  };
+}
+
+function resolveInvite(rawCode, db, port) {
+  const code = sanitizeInviteCode(rawCode);
+  if (!code) {
+    const error = new Error("Invite code is required.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const invite = db.invites.find((candidate) => sanitizeInviteCode(candidate.code) === code);
+  if (invite) {
+    if (!isInviteActive(invite)) {
+      const error = new Error("Invite has expired, been revoked, or hit its use limit.");
+      error.statusCode = 410;
+      throw error;
+    }
+
+    const guild = db.guilds.find((candidate) => candidate.id === invite.guildId);
+    const channel = guild?.channels.find((candidate) => candidate.id === invite.channelId) || null;
+    if (!guild || !channel) {
+      const error = new Error("Invite target is unavailable.");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    return createInviteRoute(withInviteUrl(invite, port), guild, channel, false, port, invite.code);
+  }
+
+  const guild = db.guilds.find((candidate) => {
+    const settings = normalizeGuildSettings(candidate);
+    return settings.allowInvites && slugify(settings.vanitySlug) === code;
+  });
+  if (!guild) {
+    const error = new Error("Invite route not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const settings = normalizeGuildSettings(guild);
+  const channel =
+    guild.channels.find((candidate) => candidate.id === settings.systemChannelId) ||
+    guild.channels.find((candidate) => candidate.type === "text" || candidate.type === "announcement" || candidate.type === "rules") ||
+    guild.channels[0] ||
+    null;
+
+  return createInviteRoute(null, guild, channel, true, port, settings.vanitySlug);
+}
+
+function createInviteRoute(invite, guild, channel, vanity, port, code) {
+  return {
+    invite,
+    guild,
+    channel,
+    vanity,
+    route: `/guilds/${guild.id}${channel ? `/channels/${channel.id}` : ""}`,
+    url: `http://127.0.0.1:${port}/invite/${encodeURIComponent(sanitizeInviteCode(code))}`
+  };
+}
+
+function withInviteUrl(invite, port) {
+  return {
+    ...invite,
+    url: `http://127.0.0.1:${port}/invite/${encodeURIComponent(invite.code)}`
+  };
+}
+
+function isInviteActive(invite) {
+  if (invite.revoked) {
+    return false;
+  }
+  if (invite.expiresAt && new Date(invite.expiresAt).getTime() <= Date.now()) {
+    return false;
+  }
+  return invite.maxUses === null || invite.uses < invite.maxUses;
+}
+
+function createInviteCode(existingCodes = new Set()) {
+  for (let attempts = 0; attempts < 8; attempts += 1) {
+    const code = crypto.randomBytes(5).toString("hex");
+    if (!existingCodes.has(code)) {
+      existingCodes.add(code);
+      return code;
+    }
+  }
+  return createId("invite", Date.now()).replace(/^invite-/, "");
+}
+
+function sanitizeInviteCode(value) {
+  return String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
 }
 
 function sanitizeInitials(value) {
@@ -959,6 +1355,20 @@ function createRequestHandler({ dataDir, port }) {
         return;
       }
 
+      const apiInviteResolveMatch = url.pathname.match(/^\/api\/invites\/([^/]+)$/);
+      if (req.method === "GET" && apiInviteResolveMatch) {
+        const route = resolveInvite(decodeURIComponent(apiInviteResolveMatch[1]), db, port);
+        sendJson(res, 200, route);
+        return;
+      }
+
+      const vanityInviteMatch = url.pathname.match(/^\/invite\/([^/]+)$/);
+      if (req.method === "GET" && vanityInviteMatch) {
+        const route = resolveInvite(decodeURIComponent(vanityInviteMatch[1]), db, port);
+        sendJson(res, 200, route);
+        return;
+      }
+
       if (req.method === "POST" && url.pathname === "/api/guilds") {
         const body = await readJson(req);
         const guild = createGuild(body, db, dataDir, port);
@@ -1016,6 +1426,42 @@ function createRequestHandler({ dataDir, port }) {
         const body = await readJson(req);
         const guild = updateGuildSettings(decodeURIComponent(guildSettingsMatch[1]), body, db, dataDir);
         sendJson(res, 200, { guild });
+        return;
+      }
+
+      const guildInviteListMatch = url.pathname.match(/^\/api\/guilds\/([^/]+)\/invites$/);
+      if (req.method === "GET" && guildInviteListMatch) {
+        const invites = listGuildInvites(decodeURIComponent(guildInviteListMatch[1]), db);
+        sendJson(res, 200, { invites });
+        return;
+      }
+
+      if (req.method === "POST" && guildInviteListMatch) {
+        const body = await readJson(req);
+        const result = createInvite(decodeURIComponent(guildInviteListMatch[1]), body, db, dataDir, port);
+        sendJson(res, 201, result);
+        return;
+      }
+
+      const guildInviteMatch = url.pathname.match(/^\/api\/guilds\/([^/]+)\/invites\/([^/]+)$/);
+      if (req.method === "DELETE" && guildInviteMatch) {
+        const body = await readJson(req);
+        const result = revokeInvite(
+          decodeURIComponent(guildInviteMatch[1]),
+          decodeURIComponent(guildInviteMatch[2]),
+          body,
+          db,
+          dataDir
+        );
+        sendJson(res, 200, result);
+        return;
+      }
+
+      const guildRolesMatch = url.pathname.match(/^\/api\/guilds\/([^/]+)\/roles$/);
+      if (req.method === "PUT" && guildRolesMatch) {
+        const body = await readJson(req);
+        const guild = updateGuildRoles(decodeURIComponent(guildRolesMatch[1]), body, db, dataDir);
+        sendJson(res, 200, { guild, users: db.users, moderation: db.moderation });
         return;
       }
 

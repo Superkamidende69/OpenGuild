@@ -13,6 +13,10 @@ export interface Role {
   name: string;
   color: string;
   permissions: string[];
+  hoist: boolean;
+  mentionable: boolean;
+  position: number;
+  managed?: boolean;
 }
 
 export interface Channel {
@@ -132,6 +136,29 @@ export interface Guild {
   };
   roles: Role[];
   channels: Channel[];
+}
+
+export interface Invite {
+  id: string;
+  guildId: string;
+  channelId: string;
+  code: string;
+  inviterId: string;
+  uses: number;
+  maxUses: number | null;
+  temporary: boolean;
+  createdAt: string;
+  expiresAt: string | null;
+  revoked: boolean;
+}
+
+export interface InviteRoute {
+  invite: Invite | null;
+  guild: Guild;
+  channel: Channel | null;
+  vanity: boolean;
+  route: string;
+  url: string;
 }
 
 export interface User {

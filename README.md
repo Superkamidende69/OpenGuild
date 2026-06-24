@@ -18,7 +18,7 @@ It is designed for people who want the familiar shape of modern server-based cha
 
 OpenGuild is a working desktop prototype, not yet a production replacement for every Discord workflow.
 
-The current app already includes the desktop shell, local host, server creation, channel creation, chat UI, local persistence, moderation tooling, settings, and free premium-style features. The next major milestones are full role permissions, invite management, real accounts, realtime networking, voice/video infrastructure, and production-ready storage.
+The current app already includes the desktop shell, local host, server creation, channel creation, invite management, chat UI, local persistence, role settings, moderation tooling, settings, and free premium-style features. The next major milestones are real accounts, realtime networking, voice/video infrastructure, and production-ready storage.
 
 ## Implemented
 
@@ -31,6 +31,8 @@ The current app already includes the desktop shell, local host, server creation,
 - Attachment-only local messages with file metadata.
 - Voice dock with mute, deafen, screen share, and connection controls.
 - Activity, roles, members, moderation queue, integrations, inbox, perks, and settings panels.
+- Persisted role settings with role creation, deletion for custom roles, colors, member display, mentionability, and permission toggles.
+- Invite management with invite creation, revocation, copyable local routes, route lookup, and vanity slug routing.
 - Command palette for channel and tool switching.
 - Persisted server settings for overview, accent color, server tags, default channels, notification defaults, verification, media filtering, invites, discovery, welcome screen, and local moderation requirements.
 - Persisted desktop settings for appearance, notifications, voice, privacy, and developer mode.
@@ -51,7 +53,7 @@ OpenGuild treats premium-style features as normal community features:
 - Profile effects.
 - Avatar decoration fields.
 - Soundboard readiness.
-- Vanity invite readiness.
+- Vanity invite routing.
 
 These features are local-first and free for every server.
 
@@ -80,6 +82,12 @@ GET  /api/events
 POST /api/guilds
 POST /api/guilds/:guildId/channels
 PUT  /api/guilds/:guildId/settings
+PUT  /api/guilds/:guildId/roles
+GET  /api/guilds/:guildId/invites
+POST /api/guilds/:guildId/invites
+DELETE /api/guilds/:guildId/invites/:inviteId
+GET  /api/invites/:code
+GET  /invite/:code
 POST /api/conversations/:conversationId/messages
 PUT  /api/settings
 POST /api/moderation/reports
@@ -147,8 +155,6 @@ server/
 
 The goal is a complete open-source community platform with Discord-like workflows and local/self-hosted ownership.
 
-- Role and permission editor.
-- Invite management and vanity invite routing.
 - Account creation, login, sessions, and profile editing.
 - Realtime gateway using WebSocket/WebRTC signaling.
 - Voice, video, screen share, and stage channel infrastructure.

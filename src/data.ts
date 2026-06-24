@@ -1,4 +1,4 @@
-import type { DirectMessage, EventItem, Guild, GuildPerks, GuildSettings, Message, User } from "./types";
+import type { DirectMessage, EventItem, Guild, GuildPerks, GuildSettings, Invite, Message, User } from "./types";
 
 const freePerks = (tag: string): GuildPerks => ({
   tier: 3,
@@ -68,11 +68,11 @@ export const guilds: Guild[] = [
       "openguild"
     ),
     roles: [
-      { id: "owner", name: "Owner", color: "#f6c85f", permissions: ["Administrator"] },
-      { id: "admin", name: "Admin", color: "#ff8a65", permissions: ["Manage server", "Manage roles"] },
-      { id: "mod", name: "Moderator", color: "#e66b75", permissions: ["Kick members", "Manage messages"] },
-      { id: "engineer", name: "Engineer", color: "#64d2b8", permissions: ["Create channels", "Use beta features"] },
-      { id: "member", name: "Member", color: "#b7bcc9", permissions: ["Send messages", "Join voice"] }
+      { id: "owner", name: "Owner", color: "#f6c85f", permissions: ["Administrator"], hoist: true, mentionable: false, position: 100, managed: true },
+      { id: "admin", name: "Admin", color: "#ff8a65", permissions: ["Manage server", "Manage roles"], hoist: true, mentionable: false, position: 80 },
+      { id: "mod", name: "Moderator", color: "#e66b75", permissions: ["Kick members", "Manage messages"], hoist: true, mentionable: true, position: 60 },
+      { id: "engineer", name: "Engineer", color: "#64d2b8", permissions: ["Create channels", "Use beta features"], hoist: true, mentionable: true, position: 40 },
+      { id: "member", name: "Member", color: "#b7bcc9", permissions: ["View channels", "Send messages", "Join voice"], hoist: false, mentionable: false, position: 0, managed: true }
     ],
     channels: [
       {
@@ -130,8 +130,8 @@ export const guilds: Guild[] = [
     perks: freePerks("GN"),
     settings: serverSettings("Local game nights, clips, and voice sessions.", "c-games-general", "c-clips", "game-night"),
     roles: [
-      { id: "member", name: "Member", color: "#b7bcc9", permissions: ["Send messages", "Join voice"] },
-      { id: "mod", name: "Moderator", color: "#e66b75", permissions: ["Manage messages"] }
+      { id: "mod", name: "Moderator", color: "#e66b75", permissions: ["Manage messages"], hoist: true, mentionable: true, position: 60 },
+      { id: "member", name: "Member", color: "#b7bcc9", permissions: ["View channels", "Send messages", "Join voice"], hoist: false, mentionable: false, position: 0, managed: true }
     ],
     channels: [
       {
@@ -168,8 +168,8 @@ export const guilds: Guild[] = [
     perks: freePerks("BG"),
     settings: serverSettings("Build notes, project threads, and local automations.", "c-builds", "c-builds", "builders"),
     roles: [
-      { id: "member", name: "Member", color: "#b7bcc9", permissions: ["Send messages"] },
-      { id: "engineer", name: "Engineer", color: "#64d2b8", permissions: ["Create channels"] }
+      { id: "engineer", name: "Engineer", color: "#64d2b8", permissions: ["Create channels"], hoist: true, mentionable: true, position: 40 },
+      { id: "member", name: "Member", color: "#b7bcc9", permissions: ["View channels", "Send messages"], hoist: false, mentionable: false, position: 0, managed: true }
     ],
     channels: [
       {
@@ -203,3 +203,5 @@ export const directMessages: DirectMessage[] = [];
 export const seedMessages: Message[] = [];
 
 export const events: EventItem[] = [];
+
+export const invites: Invite[] = [];

@@ -11,6 +11,7 @@ import {
   Circle,
   Command,
   Compass,
+  Copy,
   Crown,
   File,
   Flag,
@@ -19,6 +20,7 @@ import {
   Headphones,
   Inbox,
   Layers,
+  Link2,
   Lock,
   Megaphone,
   MessageCircle,
@@ -52,23 +54,29 @@ import {
   directMessages as fallbackDirectMessages,
   events as fallbackEvents,
   guilds as fallbackGuilds,
+  invites as fallbackInvites,
   seedMessages,
   users as fallbackUsers
 } from "./data";
 import {
+  createLocalInvite,
   createLocalChannel,
   createLocalGuild,
   createModerationReport,
   deleteModeratedMessage,
   fetchLocalState,
+  resolveLocalInvite,
   resolveApiBaseUrl,
+  revokeLocalInvite,
   sendLocalMessage,
   updateAutoMod,
+  updateLocalGuildRoles,
   updateLocalGuildSettings,
   updateLocalSettings,
   updateModerationReport,
   type CreateChannelInput,
   type CreateGuildInput,
+  type CreateInviteInput,
   type LocalHostingState
 } from "./localApi";
 import type {
@@ -81,16 +89,23 @@ import type {
   Guild,
   GuildPerks,
   GuildSettings,
+  Invite,
+  InviteRoute,
   Message,
   ModerationReportReason,
   ModerationState,
   Presence,
+  Role,
   User
 } from "./types";
 
-type InspectorView = "activity" | "roles" | "perks" | "moderation" | "apps" | "settings";
+type InspectorView = "activity" | "roles" | "invites" | "perks" | "moderation" | "apps" | "settings";
 
 type SettingsKey = keyof AppSettings;
+type ConnectedVoice = {
+  guildId: string;
+  channelId: string;
+};
 type ServerSettingsInput = {
   name: string;
   initials: string;
@@ -166,6 +181,35 @@ const quickActions = [
 
 const accentSwatches = ["#64d2b8", "#ff8a65", "#f6c85f", "#b98cff", "#7ea7ff", "#e66b75"];
 
+const roleColorSwatches = ["#f6c85f", "#ff8a65", "#e66b75", "#64d2b8", "#7ea7ff", "#b98cff", "#b7bcc9"];
+
+const permissionGroups = [
+  {
+    title: "General",
+    permissions: ["Administrator", "View channels", "Manage server", "Manage roles", "Manage channels", "View audit log"]
+  },
+  {
+    title: "Text",
+    permissions: [
+      "Send messages",
+      "Manage messages",
+      "Attach files",
+      "Use custom emoji",
+      "Use custom stickers",
+      "Create threads",
+      "Mention everyone"
+    ]
+  },
+  {
+    title: "Voice",
+    permissions: ["Join voice", "Speak", "Stream", "Use soundboard"]
+  },
+  {
+    title: "Moderation",
+    permissions: ["Kick members", "Ban members", "Timeout members", "Manage webhooks", "Use beta features"]
+  }
+];
+
 const integrations = [
   { id: "bot", title: "Verified Bots", detail: "Slash commands, OAuth scopes, webhooks" },
   { id: "bridge", title: "Federation Bridge", detail: "Self-hosted guild discovery and transport" },
@@ -178,6 +222,7 @@ function App() {
   const [userList, setUserList] = useState<User[]>(fallbackUsers);
   const [dmList, setDmList] = useState(fallbackDirectMessages);
   const [eventList, setEventList] = useState(fallbackEvents);
+  const [inviteList, setInviteList] = useState<Invite[]>(fallbackInvites);
   const [selectedGuildId, setSelectedGuildId] = useState(fallbackGuilds[0].id);
   const [selectedChannelId, setSelectedChannelId] = useState("c-general");
   const [activeDmId, setActiveDmId] = useState<string | null>(null);
@@ -187,7 +232,7 @@ function App() {
   const [showAssetPanel, setShowAssetPanel] = useState(false);
   const [inspector, setInspector] = useState<InspectorView>("activity");
   const [showCommandPalette, setShowCommandPalette] = useState(false);
-  const [voiceConnected, setVoiceConnected] = useState(false);
+  const [connectedVoice, setConnectedVoice] = useState<ConnectedVoice | null>(null);
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
   const [version, setVersion] = useState("dev");
@@ -199,6 +244,7 @@ function App() {
   const [showCreateChannel, setShowCreateChannel] = useState<{ category: string } | null>(null);
   const [settingsSaveState, setSettingsSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [serverSettingsSaveState, setServerSettingsSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [roleSaveState, setRoleSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [settings, setSettings] = useState<AppSettings>(defaultAppSettings);
   const [moderation, setModeration] = useState<ModerationState>(defaultModerationState);
   const [moderationNotice, setModerationNotice] = useState("Moderation queue is ready");
@@ -228,6 +274,7 @@ function App() {
         setUserList(state.users);
         setDmList(state.directMessages);
         setEventList(state.events);
+        setInviteList(state.invites || []);
         setMessages(state.messages);
         setSettings({
           ...defaultAppSettings,
@@ -283,6 +330,10 @@ function App() {
     [guildList, selectedGuildId]
   );
   const currentPerks = useMemo(() => getGuildPerks(currentGuild), [currentGuild]);
+  const currentUser = useMemo(
+    () => userList.find((user) => user.id === currentUserId) ?? fallbackUsers[0],
+    [userList]
+  );
 
   const activeDm = useMemo(
     () => dmList.find((dm) => dm.id === activeDmId) ?? null,
@@ -301,13 +352,43 @@ function App() {
     );
   }, [activeDmId, currentGuild, selectedChannelId]);
 
+  const connectedVoiceGuild = useMemo(
+    () => (connectedVoice ? guildList.find((guild) => guild.id === connectedVoice.guildId) ?? null : null),
+    [connectedVoice, guildList]
+  );
+  const connectedVoiceChannel = useMemo(() => {
+    if (!connectedVoice || !connectedVoiceGuild) {
+      return null;
+    }
+    return connectedVoiceGuild.channels.find((channel) => channel.id === connectedVoice.channelId) ?? null;
+  }, [connectedVoice, connectedVoiceGuild]);
+  const firstVoiceChannel = useMemo(
+    () => currentGuild.channels.find((channel) => isVoiceChannel(channel)) ?? null,
+    [currentGuild]
+  );
+  const activeVoiceTarget = isVoiceChannel(currentChannel) ? currentChannel : firstVoiceChannel;
+  const currentChannelVoiceParticipants = useMemo(
+    () => getVoiceParticipantUsers(currentGuild.id, currentChannel, connectedVoice, userList),
+    [currentGuild.id, currentChannel, connectedVoice, userList]
+  );
+  const voiceConnected = Boolean(connectedVoiceChannel);
   const activeConversationId = activeDmId ?? currentChannel?.id ?? selectedChannelId;
   const activeMessages = messages.filter((message) => message.channelId === activeConversationId);
   const visibleEvents = eventList.filter((event) =>
     currentGuild.channels.some((channel) => channel.id === event.channelId)
   );
+  const currentGuildInvites = useMemo(
+    () => inviteList.filter((invite) => invite.guildId === currentGuild.id),
+    [currentGuild.id, inviteList]
+  );
 
   const groupedChannels = useMemo(() => groupChannels(currentGuild.channels), [currentGuild]);
+
+  useEffect(() => {
+    if (connectedVoice && !connectedVoiceChannel) {
+      setConnectedVoice(null);
+    }
+  }, [connectedVoice, connectedVoiceChannel]);
 
   const sendMessage = (event: FormEvent) => {
     event.preventDefault();
@@ -398,9 +479,37 @@ function App() {
     setSelectedChannelId(firstTextChannel.id);
   };
 
+  const connectToVoiceChannel = (guild: Guild, channel: Channel) => {
+    if (!isVoiceChannel(channel)) {
+      setLocalNotice("Choose a voice or stage channel to connect");
+      return;
+    }
+
+    setConnectedVoice({ guildId: guild.id, channelId: channel.id });
+    setMuted(false);
+    setDeafened(false);
+    setLocalNotice(`Connected to ${guild.name} / ${channel.name}`);
+  };
+
+  const startVoiceForCurrentGuild = () => {
+    if (!activeVoiceTarget) {
+      setLocalNotice("Create a voice or stage channel before starting voice");
+      return;
+    }
+
+    connectToVoiceChannel(currentGuild, activeVoiceTarget);
+    if (!isVoiceChannel(currentChannel)) {
+      setSelectedChannelId(activeVoiceTarget.id);
+      setActiveDmId(null);
+    }
+  };
+
   const selectChannel = (channel: Channel) => {
     setSelectedChannelId(channel.id);
     setActiveDmId(null);
+    if (isVoiceChannel(channel)) {
+      connectToVoiceChannel(currentGuild, channel);
+    }
   };
 
   const selectDm = (dmId: string) => {
@@ -485,6 +594,98 @@ function App() {
     } catch (error) {
       setServerSettingsSaveState("error");
       setLocalNotice(error instanceof Error ? error.message : "Unable to save server settings");
+    }
+  };
+
+  const saveRoles = async (roles: Role[]) => {
+    if (!apiOnline) {
+      const nextGuild = {
+        ...currentGuild,
+        roles: normalizeRolesForClient(roles)
+      };
+      setGuildList((items) => updateGuildInList(items, nextGuild));
+      setRoleSaveState("idle");
+      setLocalNotice("Roles changed in memory because local host is offline");
+      return;
+    }
+
+    setRoleSaveState("saving");
+    try {
+      const { guild, users, moderation: nextModeration } = await updateLocalGuildRoles(apiBaseUrl, currentGuild.id, {
+        roles,
+        actorId: currentUserId
+      });
+      setGuildList((items) => updateGuildInList(items, guild));
+      setUserList(users);
+      setModeration(nextModeration);
+      setRoleSaveState("saved");
+      setLocalNotice(`${guild.name} roles saved locally`);
+    } catch (error) {
+      setRoleSaveState("error");
+      setLocalNotice(error instanceof Error ? error.message : "Unable to save roles");
+    }
+  };
+
+  const createInviteForGuild = async (input: CreateInviteInput) => {
+    if (!apiOnline) {
+      const invite = createFallbackInvite(currentGuild, input);
+      setInviteList((items) => [invite, ...items]);
+      setLocalNotice(`Invite ${invite.code} created in memory`);
+      return invite;
+    }
+
+    const { invite, invites, moderation: nextModeration } = await createLocalInvite(apiBaseUrl, currentGuild.id, input);
+    setInviteList((items) => replaceGuildInvites(items, currentGuild.id, invites));
+    setModeration(nextModeration);
+    setLocalNotice(`Invite ${invite.code} created locally`);
+    return invite;
+  };
+
+  const revokeInviteForGuild = async (inviteId: string) => {
+    if (!apiOnline) {
+      let revokedCode = "";
+      setInviteList((items) =>
+        items.map((invite) => {
+          if (invite.guildId === currentGuild.id && invite.id === inviteId) {
+            revokedCode = invite.code;
+            return { ...invite, revoked: true };
+          }
+          return invite;
+        })
+      );
+      setLocalNotice(revokedCode ? `Invite ${revokedCode} revoked in memory` : "Invite revoked in memory");
+      return;
+    }
+
+    const { invite, invites, moderation: nextModeration } = await revokeLocalInvite(apiBaseUrl, currentGuild.id, inviteId, currentUserId);
+    setInviteList((items) => replaceGuildInvites(items, currentGuild.id, invites));
+    setModeration(nextModeration);
+    setLocalNotice(`Invite ${invite.code} revoked locally`);
+  };
+
+  const openInviteRoute = (route: InviteRoute) => {
+    setSelectedGuildId(route.guild.id);
+    if (route.channel) {
+      setSelectedChannelId(route.channel.id);
+    }
+    setActiveDmId(null);
+    setLocalNotice(`${route.vanity ? "Vanity route" : "Invite"} opened ${route.guild.name}`);
+  };
+
+  const resolveInviteForGuild = async (code: string) => {
+    const route = apiOnline
+      ? await resolveLocalInvite(apiBaseUrl, code)
+      : resolveInviteInMemory(code, guildList, inviteList, apiBaseUrl);
+    openInviteRoute(route);
+    return route;
+  };
+
+  const copyInviteText = async (value: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setLocalNotice(`${label} copied`);
+    } catch {
+      setLocalNotice(value);
     }
   };
 
@@ -693,14 +894,19 @@ function App() {
                   <Plus size={13} />
                 </button>
               </div>
-              {channels.map((channel) => (
-                <ChannelButton
-                  key={channel.id}
-                  channel={channel}
-                  selected={!activeDmId && selectedChannelId === channel.id}
-                  onClick={() => selectChannel(channel)}
-                />
-              ))}
+              {channels.map((channel) => {
+                const voiceParticipants = getVoiceParticipantUsers(currentGuild.id, channel, connectedVoice, userList);
+                return (
+                  <ChannelButton
+                    key={channel.id}
+                    channel={channel}
+                    selected={!activeDmId && selectedChannelId === channel.id}
+                    connected={connectedVoice?.guildId === currentGuild.id && connectedVoice.channelId === channel.id}
+                    participants={voiceParticipants}
+                    onClick={() => selectChannel(channel)}
+                  />
+                );
+              })}
             </section>
           ))}
         </nav>
@@ -735,9 +941,15 @@ function App() {
 
         <VoiceDock
           connected={voiceConnected}
+          connectedGuild={connectedVoiceGuild}
+          connectedChannel={connectedVoiceChannel}
+          currentUser={currentUser}
           muted={muted}
           deafened={deafened}
-          onToggleConnected={() => setVoiceConnected((value) => !value)}
+          onDisconnect={() => {
+            setConnectedVoice(null);
+            setLocalNotice("Voice disconnected");
+          }}
           onToggleMuted={() => setMuted((value) => !value)}
           onToggleDeafened={() => setDeafened((value) => !value)}
         />
@@ -757,11 +969,36 @@ function App() {
             </div>
           </div>
           <div className="topbar-actions">
-            {quickActions.map((action) => (
-              <button key={action.label} className="icon-button" title={action.label} aria-label={action.label}>
-                <action.icon size={18} />
-              </button>
-            ))}
+            {quickActions.map((action) => {
+              const isVoiceAction = action.label === "Start voice";
+              const isInviteAction = action.label === "Invite";
+              const voiceTitle = connectedVoiceChannel
+                ? `Connected to ${connectedVoiceChannel.name}`
+                : activeVoiceTarget
+                  ? `Start voice in ${activeVoiceTarget.name}`
+                  : "Create a voice channel first";
+              return (
+                <button
+                  key={action.label}
+                  className={classNames(
+                    "icon-button",
+                    isVoiceAction && voiceConnected && "active",
+                    isInviteAction && inspector === "invites" && "active"
+                  )}
+                  title={isVoiceAction ? voiceTitle : action.label}
+                  aria-label={isVoiceAction ? voiceTitle : action.label}
+                  onClick={
+                    isVoiceAction
+                      ? startVoiceForCurrentGuild
+                      : isInviteAction
+                        ? () => setInspector("invites")
+                        : undefined
+                  }
+                >
+                  <action.icon size={18} />
+                </button>
+              );
+            })}
             <button className="command-button" onClick={() => setShowCommandPalette(true)}>
               <Command size={16} />
               <span>Ctrl K</span>
@@ -778,6 +1015,7 @@ function App() {
               perks={currentPerks}
               eventCount={visibleEvents.length}
               memberCount={userList.length}
+              voiceCount={currentChannelVoiceParticipants.length}
             />
             <div className="message-list">
               {activeMessages.length === 0 ? (
@@ -930,6 +1168,7 @@ function App() {
             <div className="inspector-tabs">
               <InspectorTab current={inspector} view="activity" onClick={setInspector} icon={Activity} label="Activity" />
               <InspectorTab current={inspector} view="roles" onClick={setInspector} icon={Crown} label="Roles" />
+              <InspectorTab current={inspector} view="invites" onClick={setInspector} icon={UserPlus} label="Invites" />
               <InspectorTab current={inspector} view="perks" onClick={setInspector} icon={Sparkles} label="Perks" />
               <InspectorTab current={inspector} view="moderation" onClick={setInspector} icon={Shield} label="Mod" />
               <InspectorTab current={inspector} view="apps" onClick={setInspector} icon={Bot} label="Apps" />
@@ -940,6 +1179,7 @@ function App() {
               guild={currentGuild}
               channel={currentChannel}
               events={visibleEvents}
+              invites={currentGuildInvites}
               members={userList}
               settings={settings}
               apiOnline={apiOnline}
@@ -948,15 +1188,22 @@ function App() {
               localHosting={localHosting}
               settingsSaveState={settingsSaveState}
               serverSettingsSaveState={serverSettingsSaveState}
+              roleSaveState={roleSaveState}
               moderation={moderation}
               perks={currentPerks}
               messages={messages}
+              voiceCount={currentChannelVoiceParticipants.length}
               moderationNotice={moderationNotice}
               onReportStatusChange={updateReport}
               onDeleteMessage={deleteMessage}
               onToggleAutoMod={toggleAutoMod}
               onSettingChange={updateSetting}
               onServerSettingsSave={saveServerSettings}
+              onRolesSave={saveRoles}
+              onInviteCreate={createInviteForGuild}
+              onInviteRevoke={revokeInviteForGuild}
+              onInviteResolve={resolveInviteForGuild}
+              onCopyText={copyInviteText}
               version={version}
             />
           </aside>
@@ -969,20 +1216,37 @@ function App() {
 function ChannelButton({
   channel,
   selected,
+  connected,
+  participants,
   onClick
 }: {
   channel: Channel;
   selected: boolean;
+  connected: boolean;
+  participants: User[];
   onClick: () => void;
 }) {
   return (
-    <button className={classNames("channel-button", selected && "selected")} onClick={onClick}>
-      <ChannelGlyph type={channel.type} />
-      <span>{channel.name}</span>
-      {channel.locked ? <Lock size={13} /> : null}
-      {channel.unread ? <b>{channel.unread}</b> : null}
-      {channel.participants?.length ? <small>{channel.participants.length}</small> : null}
-    </button>
+    <div className={classNames("channel-stack", connected && "voice-connected")}>
+      <button className={classNames("channel-button", selected && "selected")} onClick={onClick}>
+        <ChannelGlyph type={channel.type} />
+        <span>{channel.name}</span>
+        {channel.locked ? <Lock size={13} /> : null}
+        {channel.unread ? <b>{channel.unread}</b> : null}
+        {participants.length ? <small>{participants.length}</small> : null}
+      </button>
+      {participants.length > 0 ? (
+        <div className="voice-participant-list">
+          {participants.map((user) => (
+            <div key={user.id} className={classNames("voice-participant", user.id === currentUserId && "self")}>
+              <Avatar user={user} size="sm" />
+              <span>{user.id === currentUserId ? "You" : user.name}</span>
+              {user.id === currentUserId ? <small>Connected</small> : <small>{user.status}</small>}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -992,7 +1256,8 @@ function ChatHero({
   guild,
   perks,
   eventCount,
-  memberCount
+  memberCount,
+  voiceCount
 }: {
   channel: Channel | null;
   dmUser: User | null;
@@ -1000,6 +1265,7 @@ function ChatHero({
   perks: GuildPerks;
   eventCount: number;
   memberCount: number;
+  voiceCount: number;
 }) {
   if (dmUser) {
     return (
@@ -1051,6 +1317,11 @@ function ChatHero({
         <span>
           <Video size={15} /> HD stream
         </span>
+        {isVoiceChannel(channel) ? (
+          <span>
+            <Volume2 size={15} /> {voiceCount} connected
+          </span>
+        ) : null}
       </div>
     </section>
   );
@@ -1137,6 +1408,7 @@ function InspectorBody({
   guild,
   channel,
   events: visibleEvents,
+  invites,
   members,
   settings,
   apiOnline,
@@ -1145,21 +1417,29 @@ function InspectorBody({
   localHosting,
   settingsSaveState,
   serverSettingsSaveState,
+  roleSaveState,
   moderation,
   perks,
   messages,
+  voiceCount,
   moderationNotice,
   onReportStatusChange,
   onDeleteMessage,
   onToggleAutoMod,
   onSettingChange,
   onServerSettingsSave,
+  onRolesSave,
+  onInviteCreate,
+  onInviteRevoke,
+  onInviteResolve,
+  onCopyText,
   version
 }: {
   view: InspectorView;
   guild: Guild;
   channel: Channel | null;
   events: EventItem[];
+  invites: Invite[];
   members: User[];
   settings: AppSettings;
   apiOnline: boolean;
@@ -1168,41 +1448,35 @@ function InspectorBody({
   localHosting: LocalHostingState | null;
   settingsSaveState: "idle" | "saving" | "saved" | "error";
   serverSettingsSaveState: "idle" | "saving" | "saved" | "error";
+  roleSaveState: "idle" | "saving" | "saved" | "error";
   moderation: ModerationState;
   perks: GuildPerks;
   messages: Message[];
+  voiceCount: number;
   moderationNotice: string;
   onReportStatusChange: (reportId: string, status: "resolved" | "dismissed") => void;
   onDeleteMessage: (messageId: string) => void;
   onToggleAutoMod: (key: keyof AutoModSettings) => void;
   onSettingChange: (key: SettingsKey) => void;
   onServerSettingsSave: (input: ServerSettingsInput) => Promise<void>;
+  onRolesSave: (roles: Role[]) => Promise<void>;
+  onInviteCreate: (input: CreateInviteInput) => Promise<Invite>;
+  onInviteRevoke: (inviteId: string) => Promise<void>;
+  onInviteResolve: (code: string) => Promise<InviteRoute>;
+  onCopyText: (value: string, label: string) => Promise<void>;
   version: string;
 }) {
   if (view === "roles") {
     return (
       <div className="inspector-body">
-        <PanelHeader icon={Crown} title="Roles" actionIcon={Plus} />
-        <div className="role-list">
-          {guild.roles.map((role) => (
-            <section
-              key={role.id}
-              className={classNames("role-row", perks.enhancedRoleStyles && "enhanced-role")}
-              style={
-                {
-                  "--role-color": role.color,
-                  "--role-accent": guild.accent
-                } as React.CSSProperties
-              }
-            >
-              <span style={{ background: role.color }} />
-              <div>
-                <strong>{role.name}</strong>
-                <small>{role.permissions.join(", ")}</small>
-              </div>
-            </section>
-          ))}
-        </div>
+        <RoleSettingsPanel
+          guild={guild}
+          members={members}
+          perks={perks}
+          saveState={roleSaveState}
+          apiOnline={apiOnline}
+          onSave={onRolesSave}
+        />
         <PanelHeader icon={Users} title="Members" />
         <div className="member-list">
           {members.map((user) => (
@@ -1210,12 +1484,30 @@ function InspectorBody({
               <Avatar user={user} size="sm" />
               <div>
                 <strong>{user.name}</strong>
-                <small>{user.roleIds[0]}</small>
+                <small>{formatMemberRoles(user, guild.roles)}</small>
               </div>
               <PresenceDot status={user.status} />
             </section>
           ))}
         </div>
+      </div>
+    );
+  }
+
+  if (view === "invites") {
+    return (
+      <div className="inspector-body">
+        <InviteManagementPanel
+          guild={guild}
+          channel={channel}
+          invites={invites}
+          apiBaseUrl={apiBaseUrl}
+          apiOnline={apiOnline}
+          onCreate={onInviteCreate}
+          onRevoke={onInviteRevoke}
+          onResolve={onInviteResolve}
+          onCopyText={onCopyText}
+        />
       </div>
     );
   }
@@ -1542,7 +1834,7 @@ function InspectorBody({
       <div className="metric-grid">
         <Metric icon={Users} label="Online" value={String(members.filter((member) => member.status !== "offline").length)} />
         <Metric icon={MessageCircle} label="Threads" value="12" />
-        <Metric icon={Volume2} label="Voice" value={String(channel?.participants?.length ?? 0)} />
+        <Metric icon={Volume2} label="Voice" value={String(voiceCount)} />
       </div>
       {visibleEvents.length > 0 ? (
         <>
@@ -1573,6 +1865,477 @@ function InspectorBody({
         </section>
       </div>
     </div>
+  );
+}
+
+function InviteManagementPanel({
+  guild,
+  channel,
+  invites,
+  apiBaseUrl,
+  apiOnline,
+  onCreate,
+  onRevoke,
+  onResolve,
+  onCopyText
+}: {
+  guild: Guild;
+  channel: Channel | null;
+  invites: Invite[];
+  apiBaseUrl: string;
+  apiOnline: boolean;
+  onCreate: (input: CreateInviteInput) => Promise<Invite>;
+  onRevoke: (inviteId: string) => Promise<void>;
+  onResolve: (code: string) => Promise<InviteRoute>;
+  onCopyText: (value: string, label: string) => Promise<void>;
+}) {
+  const settings = getGuildSettings(guild);
+  const defaultChannelId = channel?.id ?? settings.systemChannelId ?? guild.channels[0]?.id ?? "";
+  const [channelId, setChannelId] = useState(defaultChannelId);
+  const [maxUses, setMaxUses] = useState("0");
+  const [expiresInHours, setExpiresInHours] = useState("24");
+  const [temporary, setTemporary] = useState(false);
+  const [lookup, setLookup] = useState(settings.vanitySlug);
+  const [route, setRoute] = useState<InviteRoute | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setChannelId(defaultChannelId);
+    setLookup(settings.vanitySlug);
+    setRoute(null);
+    setError("");
+  }, [guild.id, settings.vanitySlug]);
+
+  useEffect(() => {
+    if (channel?.id && guild.channels.some((candidate) => candidate.id === channel.id)) {
+      setChannelId(channel.id);
+    }
+  }, [channel?.id, guild.channels]);
+
+  const sortedInvites = [...invites].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const vanityUrl = inviteUrlForCode(apiBaseUrl, settings.vanitySlug);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    setSaving(true);
+
+    try {
+      const invite = await onCreate({
+        channelId,
+        maxUses: maxUses === "0" ? null : Number(maxUses),
+        expiresInHours: expiresInHours === "0" ? null : Number(expiresInHours),
+        temporary,
+        actorId: currentUserId
+      });
+      setLookup(invite.code);
+      setRoute(null);
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : "Unable to create invite.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const resolveInvite = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    setResolving(true);
+
+    try {
+      const nextRoute = await onResolve(lookup);
+      setRoute(nextRoute);
+    } catch (resolveError) {
+      setRoute(null);
+      setError(resolveError instanceof Error ? resolveError.message : "Unable to resolve invite.");
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  return (
+    <div className="invite-management-panel">
+      <PanelHeader icon={UserPlus} title="Invite Management" />
+      <section className="invite-vanity-card">
+        <Link2 size={19} />
+        <div>
+          <strong>Vanity route</strong>
+          <span>{vanityUrl}</span>
+        </div>
+        <button type="button" title="Copy vanity route" aria-label="Copy vanity route" onClick={() => onCopyText(vanityUrl, "Vanity route")}>
+          <Copy size={15} />
+        </button>
+        <button type="button" title="Test vanity route" aria-label="Test vanity route" onClick={() => onResolve(settings.vanitySlug).then(setRoute).catch((routeError) => setError(routeError instanceof Error ? routeError.message : "Unable to resolve vanity route."))}>
+          <Search size={15} />
+        </button>
+      </section>
+
+      <form className="invite-create-form" onSubmit={submit}>
+        <div className="settings-form-grid">
+          <label className="settings-field wide">
+            <span>Channel</span>
+            <select value={channelId} onChange={(event) => setChannelId(event.target.value)}>
+              {guild.channels.map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>
+                  #{candidate.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="settings-field">
+            <span>Expires</span>
+            <select value={expiresInHours} onChange={(event) => setExpiresInHours(event.target.value)}>
+              <option value="1">1 hour</option>
+              <option value="24">24 hours</option>
+              <option value="168">7 days</option>
+              <option value="720">30 days</option>
+              <option value="0">Never</option>
+            </select>
+          </label>
+          <label className="settings-field">
+            <span>Max uses</span>
+            <select value={maxUses} onChange={(event) => setMaxUses(event.target.value)}>
+              <option value="0">Unlimited</option>
+              <option value="1">1 use</option>
+              <option value="5">5 uses</option>
+              <option value="10">10 uses</option>
+              <option value="25">25 uses</option>
+              <option value="100">100 uses</option>
+            </select>
+          </label>
+        </div>
+        <div className="settings-list">
+          <ToggleRow
+            icon={UserPlus}
+            label="Temporary membership"
+            checked={temporary}
+            onClick={() => setTemporary((value) => !value)}
+          />
+        </div>
+        <button className="primary-action wide-save" type="submit" disabled={saving || !settings.allowInvites}>
+          <UserPlus size={17} />
+          {saving ? "Creating" : "Create invite"}
+        </button>
+      </form>
+
+      <PanelHeader icon={Link2} title="Invite Routes" />
+      <div className="invite-list">
+        {sortedInvites.length === 0 ? (
+          <div className="empty-panel-state">
+            <UserPlus size={22} />
+            <strong>No invites yet</strong>
+            <span>{apiOnline ? "Create one for this local server." : "Invites will stay in memory until the local host reconnects."}</span>
+          </div>
+        ) : null}
+        {sortedInvites.map((invite) => {
+          const targetChannel = guild.channels.find((candidate) => candidate.id === invite.channelId);
+          const inviteUrl = inviteUrlForCode(apiBaseUrl, invite.code);
+          return (
+            <section key={invite.id} className={classNames("invite-row", !isInviteUsable(invite) && "inactive")}>
+              <div>
+                <strong>{invite.code}</strong>
+                <span>{targetChannel ? `#${targetChannel.name}` : "Missing channel"}</span>
+                <small>{formatInviteWindow(invite)} / {formatInviteUses(invite)}</small>
+              </div>
+              <b>{formatInviteState(invite)}</b>
+              <button type="button" title={`Copy ${invite.code}`} aria-label={`Copy ${invite.code}`} onClick={() => onCopyText(inviteUrl, "Invite")}>
+                <Copy size={15} />
+              </button>
+              <button type="button" title={`Resolve ${invite.code}`} aria-label={`Resolve ${invite.code}`} onClick={() => onResolve(invite.code).then(setRoute).catch((routeError) => setError(routeError instanceof Error ? routeError.message : "Unable to resolve invite."))}>
+                <Search size={15} />
+              </button>
+              <button type="button" title={`Revoke ${invite.code}`} aria-label={`Revoke ${invite.code}`} disabled={invite.revoked} onClick={() => onRevoke(invite.id).catch((revokeError) => setError(revokeError instanceof Error ? revokeError.message : "Unable to revoke invite."))}>
+                <X size={15} />
+              </button>
+            </section>
+          );
+        })}
+      </div>
+
+      <form className="invite-resolve-form" onSubmit={resolveInvite}>
+        <PanelHeader icon={Search} title="Resolve Route" />
+        <div className="invite-resolve-row">
+          <input value={lookup} onChange={(event) => setLookup(event.target.value)} placeholder="invite code or vanity slug" />
+          <button type="submit" disabled={resolving}>
+            <Search size={15} />
+            {resolving ? "Resolving" : "Resolve"}
+          </button>
+        </div>
+      </form>
+
+      {route ? (
+        <section className="invite-route-result">
+          <CheckCircle2 size={18} />
+          <div>
+            <strong>{route.guild.name}</strong>
+            <span>{route.channel ? `#${route.channel.name}` : route.route} / {route.vanity ? "vanity" : "invite"}</span>
+          </div>
+        </section>
+      ) : null}
+
+      {error ? <p className="dialog-error settings-error">{error}</p> : null}
+      <div className={classNames("settings-status", !settings.allowInvites && "error")}>
+        {settings.allowInvites ? "Invite routes are enabled for this server" : "Invites are disabled in server settings"}
+      </div>
+    </div>
+  );
+}
+
+function RoleSettingsPanel({
+  guild,
+  members,
+  perks,
+  saveState,
+  apiOnline,
+  onSave
+}: {
+  guild: Guild;
+  members: User[];
+  perks: GuildPerks;
+  saveState: "idle" | "saving" | "saved" | "error";
+  apiOnline: boolean;
+  onSave: (roles: Role[]) => Promise<void>;
+}) {
+  const [draftRoles, setDraftRoles] = useState<Role[]>(() => normalizeRolesForClient(guild.roles));
+  const [selectedRoleId, setSelectedRoleId] = useState(guild.roles[0]?.id ?? "member");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const nextRoles = normalizeRolesForClient(guild.roles);
+    setDraftRoles(nextRoles);
+    setSelectedRoleId((current) => (nextRoles.some((role) => role.id === current) ? current : nextRoles[0]?.id ?? "member"));
+    setError("");
+  }, [guild]);
+
+  const selectedRole = draftRoles.find((role) => role.id === selectedRoleId) ?? draftRoles[0];
+  const selectedMemberCount = members.filter((member) => member.roleIds.includes(selectedRole?.id ?? "")).length;
+  const canDeleteSelectedRole = Boolean(selectedRole && !selectedRole.managed);
+
+  const updateSelectedRole = (patch: Partial<Role>) => {
+    if (!selectedRole) {
+      return;
+    }
+
+    setDraftRoles((roles) =>
+      normalizeRolesForClient(
+        roles.map((role) =>
+          role.id === selectedRole.id
+            ? {
+                ...role,
+                ...patch,
+                managed: role.managed,
+                id: role.id,
+                permissions: role.id === "owner" ? ["Administrator"] : patch.permissions ?? role.permissions
+              }
+            : role
+        )
+      )
+    );
+  };
+
+  const togglePermission = (permission: string) => {
+    if (!selectedRole || selectedRole.id === "owner") {
+      return;
+    }
+
+    const permissions = selectedRole.permissions.includes(permission)
+      ? selectedRole.permissions.filter((item) => item !== permission)
+      : [...selectedRole.permissions, permission];
+    updateSelectedRole({ permissions });
+  };
+
+  const addRole = () => {
+    const id = `role-${Date.now().toString(36)}`;
+    const nextRole: Role = {
+      id,
+      name: "New Role",
+      color: guild.accent,
+      permissions: ["View channels", "Send messages"],
+      hoist: false,
+      mentionable: false,
+      position: Math.max(10, ...draftRoles.map((role) => role.position)) - 1
+    };
+
+    setDraftRoles((roles) => normalizeRolesForClient([...roles, nextRole]));
+    setSelectedRoleId(id);
+  };
+
+  const deleteSelectedRole = () => {
+    if (!canDeleteSelectedRole || !selectedRole) {
+      return;
+    }
+
+    const nextRoles = normalizeRolesForClient(draftRoles.filter((role) => role.id !== selectedRole.id));
+    setDraftRoles(nextRoles);
+    setSelectedRoleId(nextRoles[0]?.id ?? "member");
+  };
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+
+    if (!selectedRole) {
+      setError("Create or select a role first.");
+      return;
+    }
+
+    if (draftRoles.some((role) => role.name.trim().length < 2)) {
+      setError("Every role needs at least 2 characters.");
+      return;
+    }
+
+    if (draftRoles.some((role) => !/^#[0-9a-f]{6}$/i.test(role.color))) {
+      setError("Every role needs a valid hex color.");
+      return;
+    }
+
+    await onSave(normalizeRolesForClient(draftRoles));
+  };
+
+  if (!selectedRole) {
+    return null;
+  }
+
+  return (
+    <form className="role-settings-panel" onSubmit={submit}>
+      <PanelHeader icon={Crown} title="Role Settings" />
+      <div className="role-editor-grid">
+        <div className="role-list role-selector-list">
+          {draftRoles.map((role) => (
+            <button
+              key={role.id}
+              type="button"
+              className={classNames(
+                "role-row",
+                "role-selector",
+                selectedRole.id === role.id && "selected",
+                perks.enhancedRoleStyles && "enhanced-role"
+              )}
+              style={
+                {
+                  "--role-color": role.color,
+                  "--role-accent": guild.accent
+                } as React.CSSProperties
+              }
+              onClick={() => setSelectedRoleId(role.id)}
+            >
+              <span style={{ background: role.color }} />
+              <div>
+                <strong>{role.name}</strong>
+                <small>
+                  {role.permissions.length} permissions / {members.filter((member) => member.roleIds.includes(role.id)).length} members
+                </small>
+              </div>
+            </button>
+          ))}
+          <button type="button" className="wide-action role-add-button" onClick={addRole}>
+            <Plus size={17} />
+            Add role
+          </button>
+        </div>
+
+        <section className="role-editor-card">
+          <div className="role-preview" style={{ "--role-color": selectedRole.color } as React.CSSProperties}>
+            <span>{selectedRole.name.slice(0, 2).toUpperCase()}</span>
+            <div>
+              <strong>{selectedRole.name}</strong>
+              <small>{selectedMemberCount} members use this role</small>
+            </div>
+          </div>
+
+          <div className="settings-form-grid">
+            <label className="settings-field wide">
+              <span>Role name</span>
+              <input
+                value={selectedRole.name}
+                onChange={(event) => updateSelectedRole({ name: event.target.value })}
+                maxLength={40}
+              />
+            </label>
+            <label className="settings-field wide">
+              <span>Role color</span>
+              <input
+                value={selectedRole.color}
+                onChange={(event) => updateSelectedRole({ color: event.target.value })}
+              />
+            </label>
+          </div>
+
+          <div className="role-color-picker">
+            {roleColorSwatches.map((color) => (
+              <button
+                key={color}
+                type="button"
+                className={classNames(selectedRole.color.toLowerCase() === color && "selected")}
+                style={{ "--swatch": color } as React.CSSProperties}
+                title={color}
+                aria-label={`Use role color ${color}`}
+                onClick={() => updateSelectedRole({ color })}
+              />
+            ))}
+          </div>
+
+          <div className="settings-list">
+            <ToggleRow
+              icon={Users}
+              label="Display separately"
+              checked={selectedRole.hoist}
+              onClick={() => updateSelectedRole({ hoist: !selectedRole.hoist })}
+            />
+            <ToggleRow
+              icon={AtSign}
+              label="Allow mentions"
+              checked={selectedRole.mentionable}
+              onClick={() => updateSelectedRole({ mentionable: !selectedRole.mentionable })}
+            />
+          </div>
+
+          <PanelHeader icon={Shield} title="Permissions" />
+          <div className="permission-groups">
+            {permissionGroups.map((group) => (
+              <section key={group.title} className="permission-group">
+                <strong>{group.title}</strong>
+                <div>
+                  {group.permissions.map((permission) => (
+                    <button
+                      key={permission}
+                      type="button"
+                      className={classNames(selectedRole.permissions.includes(permission) && "selected")}
+                      disabled={selectedRole.id === "owner"}
+                      onClick={() => togglePermission(permission)}
+                    >
+                      <span>{permission}</span>
+                      <b>{selectedRole.permissions.includes(permission) ? "On" : "Off"}</b>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+
+          {error ? <p className="dialog-error settings-error">{error}</p> : null}
+          <div className={classNames("settings-status", saveState)}>
+            {saveState === "saving" ? "Saving role settings" : null}
+            {saveState === "saved" ? "Role settings saved locally" : null}
+            {saveState === "error" ? "Role settings could not be saved" : null}
+            {saveState === "idle" ? (apiOnline ? "Roles are saved to the local host" : "Roles are in memory until host reconnects") : null}
+          </div>
+
+          <div className="role-editor-actions">
+            <button type="button" className="secondary-action" disabled={!canDeleteSelectedRole} onClick={deleteSelectedRole}>
+              <X size={16} />
+              Delete role
+            </button>
+            <button type="submit" className="primary-action" disabled={saveState === "saving"}>
+              <CheckCircle2 size={16} />
+              {saveState === "saving" ? "Saving" : "Save roles"}
+            </button>
+          </div>
+        </section>
+      </div>
+    </form>
   );
 }
 
@@ -2119,7 +2882,7 @@ function CommandPalette({
               <span>#{channel.name}</span>
             </button>
           ))}
-          {(["activity", "roles", "perks", "moderation", "apps", "settings"] as InspectorView[]).map((view) => (
+          {(["activity", "roles", "invites", "perks", "moderation", "apps", "settings"] as InspectorView[]).map((view) => (
             <button key={view} onClick={() => onSelectInspector(view)}>
               <SlidersHorizontal size={16} />
               <span>{capitalize(view)}</span>
@@ -2133,28 +2896,45 @@ function CommandPalette({
 
 function VoiceDock({
   connected,
+  connectedGuild,
+  connectedChannel,
+  currentUser,
   muted,
   deafened,
-  onToggleConnected,
+  onDisconnect,
   onToggleMuted,
   onToggleDeafened
 }: {
   connected: boolean;
+  connectedGuild: Guild | null;
+  connectedChannel: Channel | null;
+  currentUser: User;
   muted: boolean;
   deafened: boolean;
-  onToggleConnected: () => void;
+  onDisconnect: () => void;
   onToggleMuted: () => void;
   onToggleDeafened: () => void;
 }) {
+  const activeRoom = connected && connectedGuild && connectedChannel;
+
   return (
     <section className="voice-dock">
       <div className="voice-status">
         <Radio size={17} />
         <div>
-          <strong>{connected ? "Voice connected" : "Voice idle"}</strong>
-          <span>{connected ? "Lounge / 32 ms" : "No active room"}</span>
+          <strong>{activeRoom ? "Voice connected" : "Voice idle"}</strong>
+          <span>{activeRoom ? `${connectedGuild.name} / ${connectedChannel.name}` : "No active room"}</span>
         </div>
       </div>
+      {activeRoom ? (
+        <div className="voice-current-user">
+          <Avatar user={currentUser} size="sm" />
+          <div>
+            <strong>You</strong>
+            <span>{muted ? "Muted" : "Ready"} in voice</span>
+          </div>
+        </div>
+      ) : null}
       <div className="voice-controls">
         <button className={classNames(muted && "active")} onClick={onToggleMuted} title="Mute" aria-label="Mute">
           {muted ? <MicOff size={17} /> : <Mic size={17} />}
@@ -2165,7 +2945,7 @@ function VoiceDock({
         <button title="Share screen" aria-label="Share screen">
           <MonitorUp size={17} />
         </button>
-        <button className="disconnect" onClick={onToggleConnected} title="Disconnect" aria-label="Disconnect">
+        <button className="disconnect" onClick={onDisconnect} disabled={!activeRoom} title="Disconnect" aria-label="Disconnect">
           <Phone size={17} />
         </button>
       </div>
@@ -2268,6 +3048,33 @@ function ChannelGlyph({ type }: { type: ChannelType }) {
   return <Icon className="channel-glyph" size={18} />;
 }
 
+function isVoiceChannel(channel: Channel | null | undefined): channel is Channel {
+  return channel?.type === "voice" || channel?.type === "stage";
+}
+
+function getVoiceParticipantUsers(
+  guildId: string,
+  channel: Channel | null | undefined,
+  connectedVoice: ConnectedVoice | null,
+  users: User[]
+) {
+  if (!isVoiceChannel(channel)) {
+    return [];
+  }
+
+  const participantIds = new Set(channel.participants ?? []);
+  if (connectedVoice?.guildId === guildId && connectedVoice.channelId === channel.id) {
+    participantIds.add(currentUserId);
+  }
+
+  const usersById = new Map(users.map((user) => [user.id, user]));
+  usersById.set(currentUserId, usersById.get(currentUserId) ?? fallbackUsers[0]);
+
+  return Array.from(participantIds)
+    .map((participantId) => usersById.get(participantId))
+    .filter((user): user is User => Boolean(user));
+}
+
 function Avatar({ user, size }: { user: User; size: "sm" | "md" | "lg" }) {
   return (
     <span
@@ -2279,6 +3086,83 @@ function Avatar({ user, size }: { user: User; size: "sm" | "md" | "lg" }) {
       <PresenceDot status={user.status} />
     </span>
   );
+}
+
+function normalizeRolesForClient(roles: Role[]): Role[] {
+  const byId = new Map(
+    roles
+      .filter((role) => role.id !== "bot")
+      .map((role, index) => [
+        slugify(role.id || role.name),
+        {
+          ...role,
+          id: slugify(role.id || role.name),
+          name: role.name.trim() || "Role",
+          color: /^#[0-9a-f]{6}$/i.test(role.color) ? role.color.toLowerCase() : "#b7bcc9",
+          permissions: Array.from(new Set(role.permissions || [])),
+          hoist: Boolean(role.hoist),
+          mentionable: Boolean(role.mentionable),
+          position: Number.isFinite(role.position) ? role.position : index,
+          managed: role.managed === true || role.id === "owner" || role.id === "member"
+        } as Role
+      ])
+  );
+
+  if (!byId.has("owner")) {
+    byId.set("owner", {
+      id: "owner",
+      name: "Owner",
+      color: "#f6c85f",
+      permissions: ["Administrator"],
+      hoist: true,
+      mentionable: false,
+      position: 100,
+      managed: true
+    });
+  }
+
+  if (!byId.has("member")) {
+    byId.set("member", {
+      id: "member",
+      name: "Member",
+      color: "#b7bcc9",
+      permissions: ["View channels", "Send messages", "Join voice"],
+      hoist: false,
+      mentionable: false,
+      position: 0,
+      managed: true
+    });
+  }
+
+  const owner = byId.get("owner");
+  if (owner) {
+    byId.set("owner", {
+      ...owner,
+      permissions: ["Administrator"],
+      hoist: true,
+      managed: true,
+      position: Math.max(owner.position, 100)
+    });
+  }
+
+  const member = byId.get("member");
+  if (member) {
+    byId.set("member", {
+      ...member,
+      managed: true,
+      position: 0
+    });
+  }
+
+  return Array.from(byId.values()).sort((a, b) => b.position - a.position || a.name.localeCompare(b.name));
+}
+
+function formatMemberRoles(user: User, roles: Role[]) {
+  const roleNames = user.roleIds
+    .map((roleId) => roles.find((role) => role.id === roleId)?.name)
+    .filter(Boolean);
+
+  return roleNames.length ? roleNames.join(", ") : "Member";
 }
 
 function PresenceDot({ status }: { status: Presence }) {
@@ -2326,6 +3210,125 @@ function toggleReaction(reactions: Message["reactions"], emoji: string) {
   );
 }
 
+function replaceGuildInvites(currentInvites: Invite[], guildId: string, guildInvites: Invite[]) {
+  return [
+    ...guildInvites,
+    ...currentInvites.filter((invite) => invite.guildId !== guildId)
+  ];
+}
+
+function createFallbackInvite(guild: Guild, input: CreateInviteInput): Invite {
+  const expiresInHours = Number(input.expiresInHours);
+  const maxUses = Number(input.maxUses);
+  return {
+    id: `i-local-${Date.now()}`,
+    guildId: guild.id,
+    channelId: input.channelId || guild.channels[0]?.id || "",
+    code: `local-${Date.now().toString(36)}`,
+    inviterId: input.actorId || currentUserId,
+    uses: 0,
+    maxUses: Number.isFinite(maxUses) && maxUses > 0 ? Math.floor(maxUses) : null,
+    temporary: input.temporary,
+    createdAt: new Date().toISOString(),
+    expiresAt: Number.isFinite(expiresInHours) && expiresInHours > 0
+      ? new Date(Date.now() + Math.floor(expiresInHours) * 60 * 60 * 1000).toISOString()
+      : null,
+    revoked: false
+  };
+}
+
+function resolveInviteInMemory(code: string, guilds: Guild[], invites: Invite[], apiBaseUrl: string): InviteRoute {
+  const normalizedCode = sanitizeInviteRouteCode(code);
+  const invite = invites.find((candidate) => sanitizeInviteRouteCode(candidate.code) === normalizedCode);
+
+  if (invite) {
+    if (!isInviteUsable(invite)) {
+      throw new Error("Invite has expired, been revoked, or hit its use limit.");
+    }
+    const guild = guilds.find((candidate) => candidate.id === invite.guildId);
+    const channel = guild?.channels.find((candidate) => candidate.id === invite.channelId) ?? null;
+    if (!guild || !channel) {
+      throw new Error("Invite target is unavailable.");
+    }
+    return {
+      invite,
+      guild,
+      channel,
+      vanity: false,
+      route: `/guilds/${guild.id}/channels/${channel.id}`,
+      url: inviteUrlForCode(apiBaseUrl, invite.code)
+    };
+  }
+
+  const guild = guilds.find((candidate) => {
+    const settings = getGuildSettings(candidate);
+    return settings.allowInvites && sanitizeInviteRouteCode(settings.vanitySlug) === normalizedCode;
+  });
+  if (!guild) {
+    throw new Error("Invite route not found.");
+  }
+
+  const settings = getGuildSettings(guild);
+  const channel =
+    guild.channels.find((candidate) => candidate.id === settings.systemChannelId) ??
+    guild.channels.find((candidate) => candidate.type === "text" || candidate.type === "announcement" || candidate.type === "rules") ??
+    guild.channels[0] ??
+    null;
+
+  return {
+    invite: null,
+    guild,
+    channel,
+    vanity: true,
+    route: `/guilds/${guild.id}${channel ? `/channels/${channel.id}` : ""}`,
+    url: inviteUrlForCode(apiBaseUrl, settings.vanitySlug)
+  };
+}
+
+function inviteUrlForCode(apiBaseUrl: string, code: string) {
+  return `${apiBaseUrl.replace(/\/$/, "")}/invite/${encodeURIComponent(sanitizeInviteRouteCode(code))}`;
+}
+
+function isInviteUsable(invite: Invite) {
+  if (invite.revoked) {
+    return false;
+  }
+  if (invite.expiresAt && new Date(invite.expiresAt).getTime() <= Date.now()) {
+    return false;
+  }
+  return invite.maxUses === null || invite.uses < invite.maxUses;
+}
+
+function formatInviteState(invite: Invite) {
+  if (invite.revoked) {
+    return "Revoked";
+  }
+  if (invite.expiresAt && new Date(invite.expiresAt).getTime() <= Date.now()) {
+    return "Expired";
+  }
+  if (invite.maxUses !== null && invite.uses >= invite.maxUses) {
+    return "Used";
+  }
+  return "Active";
+}
+
+function formatInviteWindow(invite: Invite) {
+  return invite.expiresAt ? `Expires ${formatShortDate(invite.expiresAt)}` : "Never expires";
+}
+
+function formatInviteUses(invite: Invite) {
+  return invite.maxUses === null ? `${invite.uses} uses` : `${invite.uses}/${invite.maxUses} uses`;
+}
+
+function sanitizeInviteRouteCode(value: string) {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+}
+
 function createFallbackGuild(name: string): Guild {
   const id = `g-local-${Date.now()}`;
   const channels: Channel[] = [
@@ -2365,8 +3368,8 @@ function createFallbackGuild(name: string): Guild {
       serverTag: initialsFor(name).slice(0, 4)
     },
     roles: [
-      { id: "owner", name: "Owner", color: "#f6c85f", permissions: ["Administrator"] },
-      { id: "member", name: "Member", color: "#b7bcc9", permissions: ["Send messages", "Join voice"] }
+      { id: "owner", name: "Owner", color: "#f6c85f", permissions: ["Administrator"], hoist: true, mentionable: false, position: 100, managed: true },
+      { id: "member", name: "Member", color: "#b7bcc9", permissions: ["View channels", "Send messages", "Join voice"], hoist: false, mentionable: false, position: 0, managed: true }
     ],
     channels,
     settings: defaultGuildSettingsFor(name, channels)
